@@ -3,6 +3,7 @@ import { getCollection } from 'astro:content';
 import Base from '../../layouts/Base.astro';
 import EntryCard from '../../components/EntryCard.astro';
 import StatusBadge from '../../components/StatusBadge.astro';
+import { chainTitle, versionFamilies } from '../../lib/helpers';
 import assetsRaw from '../../data/assets.json';
 
 export async function getStaticPaths() {
@@ -28,9 +29,7 @@ const project = list[0].data.project;
 const domain = list[0].data.domain;
 const pendingCount = list.filter((e: any) => e.data.status === 'pending').length;
 const assets = (assetsRaw as any[]).filter((a) => a.project === project && a.topic === topic);
-const apiVersions = list
-  .filter((e: any) => e.data.type === 'api' && e.data.version)
-  .sort((a: any, b: any) => (a.data.version ?? 0) - (b.data.version ?? 0));
+const versionChains = [...versionFamilies(list).families.values()].filter((f) => f.length > 1);
 ---
 <Base>
   <div class="breadcrumb">
@@ -44,16 +43,20 @@ const apiVersions = list
     </p>
   </section>
 
-  {apiVersions.length > 1 && (
-    <div class="version-chain" style="margin-bottom:18px">
-      <span style="color:var(--faint);font-size:12px">接口版本链：</span>
-      {apiVersions.map((e: any, i: number) => (
-        <>
-          {i > 0 && <span class="version-arrow">→</span>}
-          <a class={`version-chip ${e.data.status === 'pending' ? 'current' : ''}`} href={`/docs/${e.id.split('/').map(encodeURIComponent).join('/')}/`}>
-            v{e.data.version} <StatusBadge status={e.data.status} />
-          </a>
-        </>
+  {versionChains.length > 0 && (
+    <div style="margin-bottom:18px">
+      {versionChains.map((chain: any[]) => (
+        <div class="version-chain" style="margin-bottom:6px">
+          <span style="color:var(--faint);font-size:12px">{chainTitle(chain[0].data.title)}：</span>
+          {chain.map((e: any, i: number) => (
+            <>
+              {i > 0 && <span class="version-arrow">→</span>}
+              <a class={`version-chip ${e.data.status === 'pending' ? 'current' : ''}`} href={`/docs/${e.id.split('/').map(encodeURIComponent).join('/')}/`}>
+                v{e.data.version} <StatusBadge status={e.data.status} superseded={!!e.data.superseded_by} />
+              </a>
+            </>
+          ))}
+        </div>
       ))}
     </div>
   )}

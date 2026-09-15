@@ -3,7 +3,7 @@ import { getCollection, render } from 'astro:content';
 import Base from '../../layouts/Base.astro';
 import StatusBadge from '../../components/StatusBadge.astro';
 import TypeBadge from '../../components/TypeBadge.astro';
-import { docUrl, fmtDate } from '../../lib/helpers';
+import { docUrl, fmtDate, versionFamilies } from '../../lib/helpers';
 import { buildDiff } from '../../lib/diff';
 import fileKeys from '../../../scripts/file_keys.json';
 
@@ -17,9 +17,8 @@ const entries = await getCollection('docs');
 const { Content, headings } = await render(entry);
 const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
 
-const versions = entries
-  .filter((e) => e.data.topic === entry.data.topic && e.data.type === entry.data.type && e.data.version)
-  .sort((a, b) => (a.data.version ?? 0) - (b.data.version ?? 0));
+const { rootOf, families } = versionFamilies(entries);
+const versions = entry.data.version ? families.get(rootOf(entry)) ?? [] : families.get(entry.id) ?? [];
 
 const byId = new Map(entries.map((e) => [e.id, e]));
 const byLower = new Map(entries.map((e) => [e.id.toLowerCase(), e]));
@@ -30,6 +29,7 @@ const related = (entry.data.related ?? [])
   .filter(Boolean);
 
 const supersedesEntry = entry.data.supersedes ? resolveId(entry.data.supersedes) : undefined;
+const supersededByEntry = entry.data.superseded_by ? resolveId(entry.data.superseded_by) : undefined;
 const diff = supersedesEntry?.body && entry.body ? buildDiff(supersedesEntry.body, entry.body) : null;
 const diffLabel = supersedesEntry?.data.version ? `与上一版 v${supersedesEntry.data.version} 的改动` : '与上一版的改动';
 const fileKeyByLower: Record<string, string> = Object.fromEntries(
@@ -61,7 +61,7 @@ const flipCopy = `请将文枢文档「${entry.data.title}」的状态从 pendin
       <header class="doc-head">
         <div class="row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <TypeBadge type={entry.data.type} version={entry.data.version} />
-          <StatusBadge status={entry.data.status} />
+          <StatusBadge status={entry.data.status} superseded={!!entry.data.superseded_by} />
           <span style="color:var(--faint);font-size:12px" class="mono">{fmtDate(entry.data.date)}</span>
         </div>
         <h1>{entry.data.title}</h1>
@@ -77,6 +77,12 @@ const flipCopy = `请将文枢文档「${entry.data.title}」的状态从 pendin
       {supersedesEntry && (
         <div class="banner">
           本版替代旧版：<a href={docUrl(supersedesEntry.id)}>{supersedesEntry.data.title}</a>
+        </div>
+      )}
+
+      {supersededByEntry && (
+        <div class="banner">
+          此版本已被新版替代：<a href={docUrl(supersededByEntry.id)}>{supersededByEntry.data.title}</a>
         </div>
       )}
 
@@ -132,8 +138,11 @@ const flipCopy = `请将文枢文档「${entry.data.title}」的状态从 pendin
           {entry.data.domain && <div class="meta-row"><span class="k">领域</span><span class="v">{entry.data.domain}</span></div>}
           <div class="meta-row"><span class="k">主题</span><span class="v">{entry.data.topic}</span></div>
           <div class="meta-row"><span class="k">类型</span><span class="v">{entry.data.type}{entry.data.version ? ` v${entry.data.version}` : ''}</span></div>
-          <div class="meta-row"><span class="k">状态</span><span class="v"><StatusBadge status={entry.data.status} /></span></div>
+          <div class="meta-row"><span class="k">状态</span><span class="v"><StatusBadge status={entry.data.status} superseded={!!entry.data.superseded_by} /></span></div>
           <div class="meta-row"><span class="k">日期</span><span class="v mono">{fmtDate(entry.data.date)}</span></div>
+          {entry.data.updated && (
+            <div class="meta-row"><span class="k">最近修订</span><span class="v">{fmtDate(entry.data.updated)}{entry.data.revision ? ` · 累计 ${entry.data.revision} 次` : ''}</span></div>
+          )}
         </div>
 
       {versions.length > 1 && (

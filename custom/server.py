@@ -686,6 +686,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 raise ApiError(409, "文件已存在: " + path.name)
             head = dict(meta)
             head.pop("superseded_by", None)
+            head.pop("revision", None)
+            head.pop("updated", None)
             head.update({"title": title, "version": new_version,
                          "status": str(payload.get("status") or "pending"), "date": date,
                          "supersedes": entry["id"]})
@@ -770,6 +772,67 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 updated["changes"] = changes
             return {"id": entry["id"], "updated": updated, "url": doc_url(entry["id"]),
                     "commit_message": f"chore: 更新元数据 {entry['id']}"}
+
+        return self.admin_write(mutate)
+
+    def admin_patch(self, payload):
+        def mutate(entries):
+            doc_id = str(payload.get("id", "")).strip()
+            reason = str(payload.get("reason", "")).strip()
+            edits = payload.get("edits")
+            if not doc_id:
+                raise ApiError(400, "id 必填")
+            if not reason:
+                raise ApiError(400, "reason 必填（一句话说明补丁原因，会写入 git 记录）")
+            if len(reason) > 200:
+                raise ApiError(400, "reason 不能超过 200 字")
+            if not isinstance(edits, list) or not edits:
+                raise ApiError(400, "edits 必须是非空数组（1~5 条 {find, replace}）")
+            if len(edits) > 5:
+                raise ApiError(400, "最多 5 条替换；改动较大请走 wenshu_new_version")
+            clean, total = [], 0
+            for i, ed in enumerate(edits):
+                if not isinstance(ed, dict):
+                    raise ApiError(400, f"第 {i + 1} 条必须是 {{find, replace}} 对象")
+                find = str(ed.get("find", ""))
+                replace = str(ed.get("replace", ""))
+                if not find:
+                    raise ApiError(400, f"第 {i + 1} 条 find 不能为空")
+                if len(find) > 300 or len(replace) > 300:
+                    raise ApiError(400, f"第 {i + 1} 条替换超过 300 字；改动较大请走 wenshu_new_version")
+                total += len(find) + len(replace)
+                clean.append((find, replace))
+            if total > 800:
+                raise ApiError(400, "替换合计超过 800 字；改动较大请走 wenshu_new_version")
+            entry = find_entry(entries, doc_id)
+            if not entry:
+                raise ApiError(404, "文档不存在: " + doc_id)
+            if entry["kind"] != "md":
+                raise ApiError(400, "SQL 文档不支持补丁（已执行脚本不可就地修改），请出新迁移")
+            meta = entry["meta"]
+            if str(meta.get("superseded_by") or "").strip():
+                raise ApiError(400, "该文档已被新版替代（历史版本），请对当前版打补丁或出新版")
+            if str(meta.get("status") or "") == "archived":
+                raise ApiError(400, "归档文档不可修改，请出新版")
+            cur_meta, rest = parse_md(entry["text"])
+            if cur_meta is None:
+                raise ApiError(400, "文档格式异常（缺少 frontmatter）")
+            for i, (find, replace) in enumerate(clean):
+                n = rest.count(find)
+                if n != 1:
+                    raise ApiError(400, f"第 {i + 1} 条 find 命中 {n} 次（必须恰好 1 次）：{find[:40]}")
+                rest = rest.replace(find, replace, 1)
+            revision = int(meta.get("revision") or 0) + 1
+            updated = datetime.date.today().isoformat()
+            meta["revision"] = revision
+            meta["updated"] = updated
+            text = render_md(meta, rest)
+            entry["path"].write_text(text, encoding="utf-8")
+            entry["text"] = text
+            entry["meta"].update({"revision": revision, "updated": updated})
+            return {"id": entry["id"], "patches": len(clean), "reason": reason,
+                    "revision": revision, "updated": updated, "url": doc_url(entry["id"]),
+                    "commit_message": f"chore: 补丁 {entry['id']} — {reason}（不升版）"}
 
         return self.admin_write(mutate)
 
@@ -903,6 +966,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self.admin_status(payload)
             if parsed.path == "/api/admin/meta":
                 return self.admin_meta(payload)
+            if parsed.path == "/api/admin/patch":
+                return self.admin_patch(payload)
             if parsed.path == "/api/admin/delete":
                 return self.admin_delete(payload)
             return self.json_response(404, {"error": "unknown admin endpoint"})

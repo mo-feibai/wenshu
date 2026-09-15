@@ -346,6 +346,58 @@ const totalPending = entries.filter((e) => e.data.status === 'pending').length;
         }
       });
 
+      /* 代码块复制（右上角图标） */
+      (() => {
+        const blocks = document.querySelectorAll('.prose pre');
+        if (!blocks.length) return;
+        const ICON_COPY = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>';
+        const ICON_DONE = '<svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 6L9 17l-5-5"></path></svg>';
+        const copyText = (text, done) => {
+          const fallback = () => {
+            const ta = document.createElement('textarea');
+            ta.value = text;
+            ta.setAttribute('readonly', '');
+            ta.style.position = 'fixed';
+            ta.style.top = '-1000px';
+            document.body.appendChild(ta);
+            ta.select();
+            try { document.execCommand('copy'); done(); } catch (_) {}
+            ta.remove();
+          };
+          if (navigator.clipboard && window.isSecureContext) {
+            navigator.clipboard.writeText(text).then(done).catch(fallback);
+          } else {
+            fallback();
+          }
+        };
+        blocks.forEach((pre) => {
+          const code = pre.querySelector('code');
+          if (!code || !code.textContent.trim()) return;
+          const wrap = document.createElement('div');
+          wrap.className = 'code-wrap';
+          pre.parentNode.insertBefore(wrap, pre);
+          wrap.appendChild(pre);
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'code-copy';
+          btn.title = '复制代码';
+          btn.setAttribute('aria-label', '复制代码');
+          btn.setAttribute('data-pagefind-ignore', '');
+          btn.innerHTML = ICON_COPY;
+          btn.addEventListener('click', () => {
+            copyText(code.innerText, () => {
+              btn.innerHTML = ICON_DONE;
+              btn.classList.add('copied');
+              setTimeout(() => {
+                btn.innerHTML = ICON_COPY;
+                btn.classList.remove('copied');
+              }, 1500);
+            });
+          });
+          wrap.appendChild(btn);
+        });
+      })();
+
       /* 仅文档正文可复制，界面其他区域禁用 */
       document.addEventListener('copy', (e) => {
         const sel = document.getSelection();

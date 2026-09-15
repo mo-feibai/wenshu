@@ -24,3 +24,34 @@ export const docUrl = (id: string) =>
 export const topicUrl = (topic: string) => '/topics/' + encodeURIComponent(topic) + '/';
 
 export const fmtDate = (d: Date) => d.toISOString().slice(0, 10);
+
+export const supersededText = '已被替代';
+
+export const chainTitle = (title: string) => title.replace(/[（(]\s*v\d+\s*[)）]\s*$/, '').trim();
+
+export function versionFamilies(entries: any[]) {
+  const byId = new Map(entries.map((e) => [e.id, e]));
+  const byLower = new Map(entries.map((e) => [e.id.toLowerCase(), e]));
+  const find = (id: string) => byId.get(id) ?? byLower.get(id.toLowerCase());
+  const rootOf = (e: any): string => {
+    let cur = e;
+    const seen = new Set([e.id]);
+    while (cur?.data?.supersedes) {
+      const prev = find(cur.data.supersedes);
+      if (!prev || seen.has(prev.id)) break;
+      seen.add(prev.id);
+      cur = prev;
+    }
+    return cur.id;
+  };
+  const families = new Map<string, any[]>();
+  for (const e of entries) {
+    if (!e.data.version) continue;
+    const root = rootOf(e);
+    const arr = families.get(root) ?? [];
+    arr.push(e);
+    families.set(root, arr);
+  }
+  for (const arr of families.values()) arr.sort((a, b) => (a.data.version ?? 0) - (b.data.version ?? 0));
+  return { rootOf, families };
+}

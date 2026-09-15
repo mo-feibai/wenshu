@@ -13,6 +13,8 @@ export const collections = {
       status: z.enum(['pending', 'executed', 'implemented', 'draft', 'final', 'accepted', 'archived']),
       version: z.number().optional(),
       date: z.coerce.date(),
+      revision: z.number().optional(),
+      updated: z.coerce.date().optional(),
       summary: z.string().optional(),
       related: z.array(z.string()).default([]),
       supersedes: z.string().optional(),
