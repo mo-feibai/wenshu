@@ -1,7 +1,5 @@
 ---
-import { statusText, supersededText } from '../lib/helpers';
-const { status, superseded } = Astro.props;
+import { statusText } from '../lib/helpers';
+const { status } = Astro.props;
 ---
-{superseded
-  ? <span class="badge superseded">{supersededText}</span>
-  : <span class={`badge ${status}`}>{statusText[status] ?? status}</span>}
+<span class={`badge ${status}`}>{statusText[status] ?? status}</span>

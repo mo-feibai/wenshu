@@ -274,7 +274,6 @@ mark.search-hit.current {
 .badge.draft { color: var(--violet); background: var(--violet-soft); border-color: color-mix(in srgb, var(--violet) 34%, transparent); }
 .badge.final, .badge.accepted { color: var(--blue); background: var(--blue-soft); border-color: color-mix(in srgb, var(--blue) 34%, transparent); }
 .badge.archived { color: var(--faint); background: var(--border-soft); }
-.badge.superseded { color: var(--muted); background: var(--border-soft); border-color: var(--border); }
 .badge.type { color: var(--muted); background: transparent; border-color: var(--border); font-weight: 400; }
 
 .hero { margin: 6px 0 22px; }

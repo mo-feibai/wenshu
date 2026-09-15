@@ -5,7 +5,7 @@ export const statusText = {
   draft: '草稿',
   final: '定稿',
   accepted: '已采纳',
-  archived: '归档',
+  archived: '已归档',
 } as Record<string, string>;
 
 export const typeText = {
@@ -24,8 +24,6 @@ export const docUrl = (id: string) =>
 export const topicUrl = (topic: string) => '/topics/' + encodeURIComponent(topic) + '/';
 
 export const fmtDate = (d: Date) => d.toISOString().slice(0, 10);
-
-export const supersededText = '已被替代';
 
 export const chainTitle = (title: string) => title.replace(/[（(]\s*v\d+\s*[)）]\s*$/, '').trim();
 

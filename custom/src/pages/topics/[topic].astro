@@ -52,7 +52,7 @@ const versionChains = [...versionFamilies(list).families.values()].filter((f) =>
             <>
               {i > 0 && <span class="version-arrow">→</span>}
               <a class={`version-chip ${e.data.status === 'pending' ? 'current' : ''}`} href={`/docs/${e.id.split('/').map(encodeURIComponent).join('/')}/`}>
-                v{e.data.version} <StatusBadge status={e.data.status} superseded={!!e.data.superseded_by} />
+                v{e.data.version} <StatusBadge status={e.data.status} />
               </a>
             </>
           ))}

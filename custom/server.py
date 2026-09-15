@@ -695,7 +695,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 head["related"] = [str(r) for r in payload["related"]]
             path.write_text(render_md(head, "\n" + content.lstrip("\n")), encoding="utf-8")
             new_id = path.relative_to(DOCS).as_posix().rsplit(".", 1)[0]
-            save_entry_fields(entry, {"superseded_by": new_id})
+            save_entry_fields(entry, {"superseded_by": new_id, "status": "archived"})
             return {"id": new_id, "url": doc_url(new_id),
                     "path": path.relative_to(DOCS).as_posix(), "supersedes": entry["id"],
                     "commit_message": f"feat: 版本化 {new_id}"}

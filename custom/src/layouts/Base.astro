@@ -178,7 +178,7 @@ const totalPending = entries.filter((e) => e.data.status === 'pending').length;
       let pf = null;
       const input = document.getElementById('q');
       const box = document.getElementById('results');
-      const statusText = { pending: '待处理', executed: '已执行', implemented: '已实现', draft: '草稿', final: '定稿', accepted: '已采纳', archived: '归档' };
+      const statusText = { pending: '待处理', executed: '已执行', implemented: '已实现', draft: '草稿', final: '定稿', accepted: '已采纳', archived: '已归档' };
       function debounce(fn, ms) {
         let t;
         return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); };
