@@ -1,0 +1,5 @@
+---
+import { statusText } from '../lib/helpers';
+const { status } = Astro.props;
+---
+<span class={`badge ${status}`}>{statusText[status] ?? status}</span>

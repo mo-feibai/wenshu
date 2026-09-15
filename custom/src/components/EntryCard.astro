@@ -1,0 +1,16 @@
+---
+import { docUrl, fmtDate } from '../lib/helpers';
+import StatusBadge from './StatusBadge.astro';
+import TypeBadge from './TypeBadge.astro';
+
+const { entry } = Astro.props;
+---
+<div class="entry-card">
+  <div class="row">
+    <TypeBadge type={entry.data.type} version={entry.data.version} />
+    <StatusBadge status={entry.data.status} />
+    <span class="date">{fmtDate(entry.data.date)}</span>
+  </div>
+  <h3><a href={docUrl(entry.id)}>{entry.data.title}</a></h3>
+  {entry.data.summary && <div class="summary">{entry.data.summary}</div>}
+</div>

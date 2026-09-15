@@ -1,0 +1,136 @@
+openapi: 3.0.3
+info:
+  title: 示例接口（文枢 · 接口交互演示）
+  description: |
+    虚构的示例接口，用于演示 Swagger UI 页面（/swagger/）。
+    所有接口均为 POST，参数为 form 表单（application/x-www-form-urlencoded）。
+  version: 1.0.0
+servers:
+  - url: http://127.0.0.1:8903
+    description: 本地演示
+paths:
+  /demoItem/getTreeList:
+    post:
+      summary: 树形列表
+      description: 返回示例条目的树形结构。
+      operationId: getTreeList
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [projectId]
+              properties:
+                projectId:
+                  type: string
+                  description: 项目 ID
+                  example: "demo-project"
+                nodeName:
+                  type: string
+                  description: 名称模糊搜索
+                  example: 示例
+      responses:
+        "200":
+          description: 统一响应，data 为节点树
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Result"
+                  - type: object
+                    properties:
+                      data:
+                        type: array
+                        items:
+                          $ref: "#/components/schemas/DemoNode"
+  /demoItem/addInfo:
+    post:
+      summary: 新增节点
+      description: 不传 parentId 新增一级节点；传 parentId 新增二级节点。同级名称唯一。
+      operationId: addInfo
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [projectId, nodeName]
+              properties:
+                projectId:
+                  type: string
+                  example: "demo-project"
+                nodeName:
+                  type: string
+                  example: 示例节点
+                parentId:
+                  type: string
+                  description: 上级节点 ID，传值即新增二级节点
+      responses:
+        "200":
+          description: 统一响应
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Result"
+  /demoItem/getInfo:
+    post:
+      summary: 节点详情
+      description: 返回节点基本信息与子节点。
+      operationId: getInfo
+      requestBody:
+        required: true
+        content:
+          application/x-www-form-urlencoded:
+            schema:
+              type: object
+              required: [id]
+              properties:
+                id:
+                  type: string
+      responses:
+        "200":
+          description: 统一响应
+          content:
+            application/json:
+              schema:
+                allOf:
+                  - $ref: "#/components/schemas/Result"
+                  - type: object
+                    properties:
+                      data:
+                        $ref: "#/components/schemas/DemoNode"
+components:
+  schemas:
+    Result:
+      type: object
+      properties:
+        code:
+          type: integer
+          description: 状态码，成功为 200
+          example: 200
+        msg:
+          type: string
+          example: 操作成功
+        data:
+          nullable: true
+    DemoNode:
+      type: object
+      properties:
+        id:
+          type: string
+        parentId:
+          type: string
+          nullable: true
+          description: 空 = 一级节点
+        nodeName:
+          type: string
+        currentProgress:
+          type: number
+          nullable: true
+          description: 当前进度（仅二级节点）
+        children:
+          type: array
+          nullable: true
+          items:
+            $ref: "#/components/schemas/DemoNode"

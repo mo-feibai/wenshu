@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 48 48" role="img" aria-label="文枢">
+  <defs>
+    <linearGradient id="wsg" x1="4" y1="4" x2="44" y2="44" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#6ea8fe" />
+      <stop offset="1" stop-color="#a78bfa" />
+    </linearGradient>
+  </defs>
+  <rect x="2" y="2" width="44" height="44" rx="13" fill="url(#wsg)" />
+  <g stroke="#0b1020" stroke-width="2.8" stroke-linecap="round" stroke-opacity="0.88">
+    <path d="M24 24V11.5" />
+    <path d="M24 24 13.2 31.2" />
+    <path d="M24 24 34.8 31.2" />
+  </g>
+  <g fill="#0b1020" fill-opacity="0.92">
+    <circle cx="24" cy="24" r="4.8" />
+    <circle cx="24" cy="11.5" r="3.2" />
+    <circle cx="13.2" cy="31.2" r="3.2" />
+    <circle cx="34.8" cy="31.2" r="3.2" />
+  </g>
+</svg>

@@ -1,0 +1,75 @@
+---
+import { getCollection } from 'astro:content';
+import Base from '../layouts/Base.astro';
+import EntryCard from '../components/EntryCard.astro';
+import { fmtDate } from '../lib/helpers';
+
+const entries = await getCollection('docs');
+const sorted = [...entries].sort(
+  (a, b) =>
+    b.data.date.getTime() - a.data.date.getTime() ||
+    (b.data.version ?? 0) - (a.data.version ?? 0)
+);
+
+const total = entries.length;
+const pendingSql = entries.filter((e) => e.data.type === 'sql' && e.data.status === 'pending').length;
+const pendingApi = entries.filter((e) => e.data.type === 'api' && e.data.status === 'pending').length;
+const pendingAll = entries.filter((e) => e.data.status === 'pending').length;
+
+const projectMap = new Map<string, { count: number; pending: number; latest: Date; topics: number }>();
+for (const e of entries) {
+  const p = projectMap.get(e.data.project) ?? { count: 0, pending: 0, latest: new Date(0), topics: 0 };
+  p.count++;
+  if (e.data.status === 'pending') p.pending++;
+  if (e.data.date > p.latest) p.latest = e.data.date;
+  projectMap.set(e.data.project, p);
+}
+const topicSets = new Map<string, Set<string>>();
+for (const e of entries) {
+  if (!topicSets.has(e.data.project)) topicSets.set(e.data.project, new Set());
+  topicSets.get(e.data.project)!.add(e.data.topic);
+}
+
+const recent = sorted.slice(0, 9);
+---
+<Base>
+  <section class="hero hero-home">
+    <img class="hero-logo" src="/logo.svg" alt="文枢" width="52" height="52" />
+    <div>
+      <h1>文枢</h1>
+      <p>文档脉络 · 版本有迹 · 人机共读</p>
+    </div>
+  </section>
+
+  <section class="stats">
+    <div class="stat"><div class="num">{total}</div><div class="label">文档总数</div></div>
+    <div class="stat"><div class="num pending">{pendingSql}</div><div class="label">待执行 SQL</div></div>
+    <div class="stat"><div class="num pending">{pendingApi}</div><div class="label">待实现接口</div></div>
+    <div class="stat"><div class="num green">{projectMap.size}</div><div class="label">项目 · {[...topicSets.values()].reduce((n, s) => n + s.size, 0)} 个主题</div></div>
+  </section>
+
+  <h2 class="section-title">项目</h2>
+  <section class="grid">
+    {[...projectMap.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([name, p]) => (
+      <div class="project-card">
+        <h3>{name}</h3>
+        <div class="meta">
+          <span>{p.count} 篇文档</span>
+          <span>{topicSets.get(name)?.size ?? 0} 个主题</span>
+          {p.pending > 0 ? <span style="color:var(--amber)">{p.pending} 个待办</span> : <span style="color:var(--green)">无待办</span>}
+          <span>最近 {fmtDate(p.latest)}</span>
+        </div>
+      </div>
+    ))}
+  </section>
+
+  <h2 class="section-title">最近变更</h2>
+  <section class="cards">
+    {recent.map((e) => <EntryCard entry={e} />)}
+  </section>
+
+  <h2 class="section-title">待办快照</h2>
+  <p style="color:var(--muted);margin-top:-6px">
+    共 {pendingAll} 项待处理（SQL 待执行 {pendingSql} · 接口待实现 {pendingApi}），详见 <a href="/pending/" style="color:var(--accent)">待办看板</a>。
+  </p>
+</Base>

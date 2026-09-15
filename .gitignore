@@ -1,0 +1,51 @@
+# 依赖与构建产物
+node_modules/
+dist/
+.astro/
+__pycache__/
+*.pyc
+
+# 运行时数据与密钥（本地保留，不入库）
+custom/server_config.json
+custom/sessions.json
+custom/shares.json
+
+# 由文档库生成的站点内容（构建时重新生成）
+custom/src/content/docs/
+custom/src/data/assets.json
+custom/public/files/
+custom/scripts/file_keys.json
+
+# 真实文档数据与备份产物（仅保留在本地）
+*.tar
+*.tar.gz
+downloads/
+status-draft.md
+manifest-*.json
+.openchamber/
+assets/
+
+# 站点生成器对比实验（未纳入本仓库）
+hextra/
+starlight/
+
+# 一次性迁移/验证脚本（未纳入本仓库，防止误提交）
+apply_metadata.py
+correct_topics.py
+diag_related.py
+draft_metadata.py
+dump_topics.py
+fix_related.py
+fix_specs.py
+flip_status.py
+patch_theme.py
+prep_content.py
+prep3_content.py
+s3_finish.sh
+s3_verify.sh
+s3_verify2.sh
+deploy_admin2.sh
+
+# 编辑器/系统
+.DS_Store
+Thumbs.db

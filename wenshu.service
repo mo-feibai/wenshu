@@ -1,0 +1,13 @@
+[Unit]
+Description=WenShu (文枢) docs site & service
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/wenshu/app
+ExecStart=/usr/bin/python3 /opt/wenshu/app/server.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

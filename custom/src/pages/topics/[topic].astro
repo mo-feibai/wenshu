@@ -1,0 +1,80 @@
+---
+import { getCollection } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+import EntryCard from '../../components/EntryCard.astro';
+import StatusBadge from '../../components/StatusBadge.astro';
+import assetsRaw from '../../data/assets.json';
+
+export async function getStaticPaths() {
+  const entries = await getCollection('docs');
+  const topics = [...new Set(entries.map((e) => e.data.topic))];
+  return topics.map((topic) => ({
+    params: { topic },
+    props: {
+      list: entries
+        .filter((e) => e.data.topic === topic)
+        .sort(
+          (a, b) =>
+            b.data.date.getTime() - a.data.date.getTime() ||
+            (b.data.version ?? 0) - (a.data.version ?? 0)
+        ),
+    },
+  }));
+}
+
+const { list } = Astro.props;
+const topic = list[0].data.topic;
+const project = list[0].data.project;
+const domain = list[0].data.domain;
+const pendingCount = list.filter((e: any) => e.data.status === 'pending').length;
+const assets = (assetsRaw as any[]).filter((a) => a.project === project && a.topic === topic);
+const apiVersions = list
+  .filter((e: any) => e.data.type === 'api' && e.data.version)
+  .sort((a: any, b: any) => (a.data.version ?? 0) - (b.data.version ?? 0));
+---
+<Base>
+  <div class="breadcrumb">
+    <a href="/">{project}</a> {domain ? ` / ${domain}` : ''} / {topic}
+  </div>
+  <section class="hero">
+    <h1>{topic}</h1>
+    <p>
+      {list.length} 篇文档
+      {pendingCount > 0 ? ` · ${pendingCount} 项待办` : ' · 无待办'}
+    </p>
+  </section>
+
+  {apiVersions.length > 1 && (
+    <div class="version-chain" style="margin-bottom:18px">
+      <span style="color:var(--faint);font-size:12px">接口版本链：</span>
+      {apiVersions.map((e: any, i: number) => (
+        <>
+          {i > 0 && <span class="version-arrow">→</span>}
+          <a class={`version-chip ${e.data.status === 'pending' ? 'current' : ''}`} href={`/docs/${e.id.split('/').map(encodeURIComponent).join('/')}/`}>
+            v{e.data.version} <StatusBadge status={e.data.status} />
+          </a>
+        </>
+      ))}
+    </div>
+  )}
+
+  <div class="timeline">
+    {list.map((e: any) => (
+      <div class="tl-item">
+        <span class={`tl-dot ${e.data.status}`} />
+        <EntryCard entry={e} />
+      </div>
+    ))}
+  </div>
+
+  {assets.length > 0 && (
+    <section style="margin-top:26px">
+      <h2 style="font-size:15px;color:var(--muted);margin:0 0 10px">相关文件（{assets.length}）</h2>
+      <div class="asset-list">
+        {assets.map((a: any) => (
+          <a href={a.url}>{a.name}<span class="asset-date">{a.date}</span></a>
+        ))}
+      </div>
+    </section>
+  )}
+</Base>

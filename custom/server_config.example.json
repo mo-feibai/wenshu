@@ -1,0 +1,6 @@
+{
+  "password": "change-me",
+  "port": 8903,
+  "docs_dir": "/opt/wenshu/docs",
+  "api_token": ""
+}

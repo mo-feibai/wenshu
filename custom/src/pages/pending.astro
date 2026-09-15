@@ -1,0 +1,64 @@
+---
+import { getCollection } from 'astro:content';
+import Base from '../layouts/Base.astro';
+import StatusBadge from '../components/StatusBadge.astro';
+import TypeBadge from '../components/TypeBadge.astro';
+import { docUrl, fmtDate } from '../lib/helpers';
+
+const entries = await getCollection('docs');
+const pending = entries
+  .filter((e) => e.data.status === 'pending')
+  .sort((a, b) => a.data.date.getTime() - b.data.date.getTime());
+const sql = pending.filter((e) => e.data.type === 'sql');
+const api = pending.filter((e) => e.data.type === 'api');
+
+const targetOf = (t: string) => (t === 'sql' ? 'executed（已执行）' : t === 'api' ? 'implemented（已实现）' : 'final（定稿）');
+const flipInstruction = (e: any) =>
+  `请将文枢文档「${e.data.title}」的状态从 pending 改为 ${targetOf(e.data.type)}，文档 ID：${e.id}。完成后重新构建站点。`;
+---
+<Base>
+  <section class="hero">
+    <h1>待办看板</h1>
+    <p>未落地前可持续修改；执行 / 实现完成后状态翻转并冻结。</p>
+  </section>
+
+  <div class="chips" id="chips">
+    <button class="chip active" data-kind="all">全部 {pending.length}</button>
+    <button class="chip" data-kind="sql">待执行 SQL {sql.length}</button>
+    <button class="chip" data-kind="api">待实现接口 {api.length}</button>
+  </div>
+
+  <table class="pending-table" id="ptable">
+    <thead>
+      <tr><th>状态</th><th>类型</th><th>标题</th><th>主题</th><th>日期</th><th>操作</th></tr>
+    </thead>
+    <tbody>
+      {pending.map((e) => (
+        <tr data-kind={e.data.type}>
+          <td><StatusBadge status={e.data.status} /></td>
+          <td><TypeBadge type={e.data.type} version={e.data.version} /></td>
+          <td><a href={docUrl(e.id)}>{e.data.title}</a></td>
+          <td>{e.data.topic}</td>
+          <td class="mono" style="color:var(--muted)">{fmtDate(e.data.date)}</td>
+          <td>
+            <button class="copy-btn" data-label="复制翻转指令" data-copy={flipInstruction(e)}>复制翻转指令</button>
+          </td>
+        </tr>
+      ))}
+      {pending.length === 0 && <tr><td colspan="6" style="text-align:center;color:var(--faint)">没有待办 🎉</td></tr>}
+    </tbody>
+  </table>
+</Base>
+<script is:inline>
+  const chips = document.querySelectorAll('#chips .chip');
+  chips.forEach((chip) => {
+    chip.addEventListener('click', () => {
+      chips.forEach((c) => c.classList.remove('active'));
+      chip.classList.add('active');
+      const kind = chip.dataset.kind;
+      document.querySelectorAll('#ptable tbody tr').forEach((tr) => {
+        tr.style.display = kind === 'all' || tr.dataset.kind === kind ? '' : 'none';
+      });
+    });
+  });
+</script>

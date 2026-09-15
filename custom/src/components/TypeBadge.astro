@@ -1,0 +1,5 @@
+---
+import { typeText } from '../lib/helpers';
+const { type, version } = Astro.props;
+---
+<span class="badge type">{typeText[type] ?? type}{version ? ` v${version}` : ''}</span>

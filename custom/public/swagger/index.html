@@ -1,0 +1,97 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>接口交互 · 文枢</title>
+  <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+  <link rel="stylesheet" href="/vendor/swagger-ui/swagger-ui.css" />
+  <style>
+    @font-face { font-family: 'Maple Mono CN'; src: url('/fonts/MapleMono-CN-Regular.woff2') format('woff2'); font-weight: 400; font-display: swap; }
+    @font-face { font-family: 'Maple Mono CN'; src: url('/fonts/MapleMono-CN-SemiBold.woff2') format('woff2'); font-weight: 600; font-display: swap; }
+    @font-face { font-family: 'Maple Mono CN'; src: url('/fonts/MapleMono-CN-Bold.woff2') format('woff2'); font-weight: 700; font-display: swap; }
+    :root { --bg: #f6f8fc; --card: #ffffff; --border: #dde4f0; --text: #18202f; --muted: #5d6b85; --accent: #2563eb; }
+    [data-theme='dark'] { --bg: #0a0e1a; --card: #111a2e; --border: #1d2a45; --text: #e8edf7; --muted: #8d99b3; --accent: #6ea8fe; }
+    * { box-sizing: border-box; }
+    html { font-synthesis: none; }
+    body { margin: 0; background: var(--bg); color: var(--text); font-family: 'Maple Mono CN', Consolas, monospace; }
+    .topbar {
+      position: sticky; top: 0; z-index: 50; display: flex; align-items: center; gap: 14px;
+      height: 58px; padding: 0 20px; background: color-mix(in srgb, var(--bg) 92%, transparent);
+      backdrop-filter: blur(8px); border-bottom: 1px solid var(--border);
+    }
+    .brand { display: inline-flex; align-items: center; gap: 8px; font-size: 20px; font-weight: 700; letter-spacing: 2px; color: var(--accent); text-decoration: none; }
+    .brand img { width: 22px; height: 22px; display: block; }
+    .sub { color: var(--muted); font-size: 12px; }
+    .spacer { flex: 1; }
+    .back { color: var(--muted); font-size: 13px; text-decoration: none; }
+    .back:hover { color: var(--accent); }
+    #theme-toggle {
+      width: 34px; height: 34px; border-radius: 9px; cursor: pointer;
+      background: var(--card); color: var(--muted); border: 1px solid var(--border); font-size: 15px;
+    }
+    .wrap { max-width: 1360px; margin: 0 auto; padding: 20px 24px 60px; }
+    .swagger-ui { font-family: 'Maple Mono CN', Consolas, monospace; }
+    .swagger-ui .topbar { display: none; }
+    [data-theme='dark'] .swagger-ui { color: var(--text); }
+    [data-theme='dark'] .swagger-ui .info .title,
+    [data-theme='dark'] .swagger-ui .info p,
+    [data-theme='dark'] .swagger-ui .info li,
+    [data-theme='dark'] .swagger-ui .info a,
+    [data-theme='dark'] .swagger-ui .opblock-tag,
+    [data-theme='dark'] .swagger-ui .opblock-tag small,
+    [data-theme='dark'] .swagger-ui .opblock .opblock-summary-description,
+    [data-theme='dark'] .swagger-ui .opblock .opblock-summary-path,
+    [data-theme='dark'] .swagger-ui .opblock .opblock-summary-path a,
+    [data-theme='dark'] .swagger-ui .parameter__name,
+    [data-theme='dark'] .swagger-ui .parameter__type,
+    [data-theme='dark'] .swagger-ui .parameter__in,
+    [data-theme='dark'] .swagger-ui table thead tr th,
+    [data-theme='dark'] .swagger-ui table tbody tr td,
+    [data-theme='dark'] .swagger-ui .response-col_status,
+    [data-theme='dark'] .swagger-ui .response-col_description,
+    [data-theme='dark'] .swagger-ui .responses-inner h4,
+    [data-theme='dark'] .swagger-ui .responses-inner h5,
+    [data-theme='dark'] .swagger-ui label { color: var(--text); }
+    [data-theme='dark'] .swagger-ui .scheme-container,
+    [data-theme='dark'] .swagger-ui .opblock .opblock-body { background: transparent; box-shadow: none; }
+    [data-theme='dark'] .swagger-ui select,
+    [data-theme='dark'] .swagger-ui input[type='text'] { background: #0f1627; color: var(--text); border-color: var(--border); }
+    [data-theme='dark'] .swagger-ui .btn { border-color: var(--border); background: #0f1627; color: var(--text); }
+  </style>
+</head>
+<body>
+  <header class="topbar">
+    <a class="brand" href="/"><img src="/logo.svg" alt="" width="22" height="22" />文枢</a>
+    <span class="sub">接口交互文档</span>
+    <span class="spacer"></span>
+    <a class="back" href="/">← 返回总览</a>
+    <button id="theme-toggle" title="切换明暗主题">◐</button>
+  </header>
+  <div class="wrap">
+    <div id="swagger-ui"></div>
+  </div>
+  <script>
+    const html = document.documentElement;
+    const saved = localStorage.getItem('ws-theme');
+    if (saved) html.dataset.theme = saved;
+    document.getElementById('theme-toggle')?.addEventListener('click', () => {
+      html.dataset.theme = html.dataset.theme === 'dark' ? 'light' : 'dark';
+      localStorage.setItem('ws-theme', html.dataset.theme);
+    });
+  </script>
+  <script src="/vendor/swagger-ui/swagger-ui-bundle.js"></script>
+  <script>
+    window.addEventListener('DOMContentLoaded', () => {
+      window.ui = SwaggerUIBundle({
+        url: '/openapi/spec.yml',
+        dom_id: '#swagger-ui',
+        deepLinking: true,
+        filter: true,
+        docExpansion: 'list',
+        defaultModelsExpandDepth: -1,
+      });
+    });
+  </script>
+</body>
+</html>

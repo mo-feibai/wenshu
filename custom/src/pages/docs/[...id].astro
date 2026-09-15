@@ -1,0 +1,343 @@
+---
+import { getCollection, render } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+import StatusBadge from '../../components/StatusBadge.astro';
+import TypeBadge from '../../components/TypeBadge.astro';
+import { docUrl, fmtDate } from '../../lib/helpers';
+import { buildDiff } from '../../lib/diff';
+import fileKeys from '../../../scripts/file_keys.json';
+
+export async function getStaticPaths() {
+  const entries = await getCollection('docs');
+  return entries.map((entry) => ({ params: { id: entry.id }, props: { entry } }));
+}
+
+const { entry } = Astro.props;
+const entries = await getCollection('docs');
+const { Content, headings } = await render(entry);
+const toc = headings.filter((h) => h.depth === 2 || h.depth === 3);
+
+const versions = entries
+  .filter((e) => e.data.topic === entry.data.topic && e.data.type === entry.data.type && e.data.version)
+  .sort((a, b) => (a.data.version ?? 0) - (b.data.version ?? 0));
+
+const byId = new Map(entries.map((e) => [e.id, e]));
+const byLower = new Map(entries.map((e) => [e.id.toLowerCase(), e]));
+const resolveId = (id: string) => byId.get(id) ?? byLower.get(id.toLowerCase());
+
+const related = (entry.data.related ?? [])
+  .map((id) => resolveId(id))
+  .filter(Boolean);
+
+const supersedesEntry = entry.data.supersedes ? resolveId(entry.data.supersedes) : undefined;
+const diff = supersedesEntry?.body && entry.body ? buildDiff(supersedesEntry.body, entry.body) : null;
+const diffLabel = supersedesEntry?.data.version ? `与上一版 v${supersedesEntry.data.version} 的改动` : '与上一版的改动';
+const fileKeyByLower: Record<string, string> = Object.fromEntries(
+  Object.entries(fileKeys as Record<string, string>).map(([k, v]) => [k.toLowerCase(), v]),
+);
+const mdKey = fileKeyByLower[`${entry.id}.md`.toLowerCase()];
+const sqlKey = fileKeyByLower[`${entry.id}.sql`.toLowerCase()];
+const rawFile =
+  entry.data.attachment ??
+  (entry.data.type === 'sql'
+    ? sqlKey ? `/files/${sqlKey}` : `/files/${entry.data.title}.sql`
+    : mdKey ? `/files/${mdKey}` : undefined);
+
+const targetLabel = entry.data.type === 'sql' ? 'executed（已执行）' : entry.data.type === 'api' ? 'implemented（已实现）' : 'final（定稿）';
+const flipCopy = `请将文枢文档「${entry.data.title}」的状态从 pending 改为 ${targetLabel}，文档 ID：${entry.id}。完成后重新构建站点。`;
+---
+<Base>
+  <div class="breadcrumb">
+    <a href={`/topics/${encodeURIComponent(entry.data.topic)}/`}>{entry.data.topic}</a>
+    {' / '}
+    {entry.data.project}{entry.data.domain ? ` · ${entry.data.domain}` : ''}
+  </div>
+
+  <div class="doc-grid">
+    <article data-pagefind-body>
+      <span data-pagefind-meta="topic" hidden>{entry.data.topic}</span>
+      <span data-pagefind-meta="status" hidden>{entry.data.status}</span>
+      <span data-pagefind-meta="type" hidden>{entry.data.type}</span>
+      <header class="doc-head">
+        <div class="row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <TypeBadge type={entry.data.type} version={entry.data.version} />
+          <StatusBadge status={entry.data.status} />
+          <span style="color:var(--faint);font-size:12px" class="mono">{fmtDate(entry.data.date)}</span>
+        </div>
+        <h1>{entry.data.title}</h1>
+      </header>
+
+      {entry.data.status === 'pending' && (
+        <div class="banner">
+          本条目状态为 <b>待处理</b>：未执行 / 未实现前可直接修改；落地后请翻转状态自动冻结。
+          <button class="copy-btn" id="flip-btn" data-label="复制翻转指令" data-copy={flipCopy}>复制翻转指令</button>
+        </div>
+      )}
+
+      {supersedesEntry && (
+        <div class="banner">
+          本版替代旧版：<a href={docUrl(supersedesEntry.id)}>{supersedesEntry.data.title}</a>
+        </div>
+      )}
+
+      {diff && diff.hunks.length > 0 && (
+        <details class="diff-block" data-pagefind-ignore>
+          <summary>
+            <span>{diffLabel}</span>
+            <span class="diff-stat"><span class="s-add">+{diff.added}</span> <span class="s-del">-{diff.removed}</span></span>
+          </summary>
+          <div class="diff-body">
+            {diff.hunks.map((h) => (
+              <div class="diff-hunk">
+                <div class="diff-hunk-head">{`@@ -${h.oldStart},${h.oldCount} +${h.newStart},${h.newCount} @@`}</div>
+                {h.lines.map((l) => (
+                  <div class={`diff-line d-${l.type}`}>
+                    <span class="d-sign">{l.type === 'add' ? '+' : l.type === 'del' ? '-' : ' '}</span>
+                    <span class="d-text">
+                      {l.words ? l.words.map((w) => (w.changed ? <mark class={`w-${l.type}`}>{w.text}</mark> : w.text)) : l.text}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+        </details>
+      )}
+
+      <div class="prose">
+        <Content />
+      </div>
+    </article>
+
+    <aside class="meta-rail">
+      {toc.length > 1 && (
+        <section class="rail-card toc-block">
+          <h4>本页目录</h4>
+          <nav class="toc">
+            {toc.map((h) => (
+              <a class={`toc-h${h.depth}`} href={`#${h.slug}`}>{h.text}</a>
+            ))}
+          </nav>
+        </section>
+      )}
+      <section class="rail-card meta-panel">
+        <button class="meta-toggle" type="button" aria-expanded="true">
+          <span>元信息</span>
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M9 6l6 6-6 6" />
+          </svg>
+        </button>
+        <div class="meta-panel-body">
+          <div class="meta-row"><span class="k">项目</span><span class="v">{entry.data.project}</span></div>
+          {entry.data.domain && <div class="meta-row"><span class="k">领域</span><span class="v">{entry.data.domain}</span></div>}
+          <div class="meta-row"><span class="k">主题</span><span class="v">{entry.data.topic}</span></div>
+          <div class="meta-row"><span class="k">类型</span><span class="v">{entry.data.type}{entry.data.version ? ` v${entry.data.version}` : ''}</span></div>
+          <div class="meta-row"><span class="k">状态</span><span class="v"><StatusBadge status={entry.data.status} /></span></div>
+          <div class="meta-row"><span class="k">日期</span><span class="v mono">{fmtDate(entry.data.date)}</span></div>
+        </div>
+
+      {versions.length > 1 && (
+        <div class="version-block">
+          <h4 style="margin-top:14px">版本链</h4>
+          <div class="version-chain">
+            {versions.map((v, i) => (
+              <>
+                {i > 0 && <span class="version-arrow">→</span>}
+                <a class={`version-chip ${v.id === entry.id ? 'current' : ''}`} href={docUrl(v.id)}>v{v.data.version}</a>
+              </>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {related.length > 0 && (
+        <div class="related-block">
+          <h4 style="margin-top:14px">相关</h4>
+          <div class="meta-links">
+            {related.map((r: any) => <a href={docUrl(r.id)}>{r.data.title}</a>)}
+          </div>
+        </div>
+      )}
+
+      {(rawFile || (entry.data.attachments?.length ?? 0) > 0) && (
+        <div class="assets-block">
+          <h4 style="margin-top:14px">附件</h4>
+          <div class="meta-links">
+            {rawFile && <a href={rawFile} download>{entry.data.type === 'sql' ? '下载原始脚本' : '下载 Markdown'}</a>}
+            {(entry.data.attachments ?? []).map((a: string) => (
+              <a href={a}>{a.split('/').pop()?.replace(/^[^_]*__/, '') ?? a}</a>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div class="actions-block">
+        <h4 style="margin-top:14px">操作</h4>
+        <button class="icon-btn" id="share-open" title="创建临时分享链接" aria-label="创建临时分享链接">
+          <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71" />
+            <path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71" />
+          </svg>
+        </button>
+      </div>
+      </section>
+    </aside>
+  </div>
+
+  <div class="share-modal" id="share-modal" hidden>
+    <div class="share-card">
+      <h3>创建临时分享链接</h3>
+      <p class="hint">仅此文档可访问，到期自动失效，无需密码。</p>
+      <label class="field">到期时间
+        <input type="datetime-local" id="share-expiry" />
+      </label>
+      <div class="actions">
+        <button class="copy-btn" id="share-create">创建链接</button>
+        <button class="copy-btn" id="share-cancel">取消</button>
+      </div>
+      <div class="share-result" id="share-result" hidden>
+        <input type="text" id="share-url" readonly />
+        <button class="copy-btn" id="share-copy">复制</button>
+      </div>
+      <div class="share-error" id="share-error" hidden></div>
+    </div>
+  </div>
+
+  <script is:inline>
+    (() => {
+      const toc = document.querySelector('.toc');
+      if (!toc) return;
+      const decodeHash = (raw) => {
+        try { return decodeURIComponent(raw); } catch { return raw; }
+      };
+      const links = [...toc.querySelectorAll('a')];
+      const targets = links.map((a) => document.getElementById(decodeHash((a.getAttribute('href') || '').slice(1))));
+      if (!targets.some(Boolean)) return;
+      toc.addEventListener('click', (e) => {
+        const a = e.target.closest ? e.target.closest('a') : null;
+        if (!a) return;
+        const el = document.getElementById(decodeHash((a.getAttribute('href') || '').slice(1)));
+        if (!el) return;
+        e.preventDefault();
+        window.scrollTo({ top: Math.max(0, el.getBoundingClientRect().top + window.scrollY - 76), behavior: 'smooth' });
+        history.pushState(null, '', a.getAttribute('href'));
+      });
+      let raf = 0;
+      const spy = () => {
+        raf = 0;
+        let current = -1;
+        targets.forEach((el, i) => {
+          if (el && el.getBoundingClientRect().top <= 96) current = i;
+        });
+        if (window.innerHeight + window.scrollY >= document.documentElement.scrollHeight - 4) current = targets.length - 1;
+        links.forEach((a, i) => a.classList.toggle('active', i === current));
+      };
+      window.addEventListener('scroll', () => { if (!raf) raf = requestAnimationFrame(spy); }, { passive: true });
+      window.addEventListener('load', spy);
+      requestAnimationFrame(spy);
+    })();
+
+    (() => {
+      const panel = document.querySelector('.meta-panel');
+      if (!panel) return;
+      const toggle = panel.querySelector('.meta-toggle');
+      const KEY = 'ws-meta-open';
+      const setCollapsed = (collapsed) => {
+        panel.classList.toggle('collapsed', collapsed);
+        toggle.setAttribute('aria-expanded', collapsed ? 'false' : 'true');
+      };
+      let saved = null;
+      try { saved = sessionStorage.getItem(KEY); } catch {}
+      if (saved !== null) {
+        setCollapsed(saved === '0');
+      } else if (panel.scrollHeight > panel.clientHeight + 8) {
+        setCollapsed(true);
+      }
+      toggle.addEventListener('click', () => {
+        const collapsed = !panel.classList.contains('collapsed');
+        setCollapsed(collapsed);
+        try { sessionStorage.setItem(KEY, collapsed ? '0' : '1'); } catch {}
+      });
+    })();
+
+    (() => {
+      const prose = document.querySelector('.prose');
+      if (!prose) return;
+      const heading = [...prose.querySelectorAll('h2')].find((h) => h.textContent.trim() === '本版变更');
+      if (!heading) return;
+      const section = document.createElement('section');
+      section.className = 'changelog-card';
+      heading.parentNode.insertBefore(section, heading);
+      section.appendChild(heading);
+      let node = section.nextSibling;
+      while (node && !(node.nodeType === 1 && node.tagName === 'H2')) {
+        const next = node.nextSibling;
+        section.appendChild(node);
+        node = next;
+      }
+    })();
+
+    (() => {
+      const openBtn = document.getElementById('share-open');
+      if (!openBtn) return;
+      const modal = document.getElementById('share-modal');
+      const expiry = document.getElementById('share-expiry');
+      const createBtn = document.getElementById('share-create');
+      const cancelBtn = document.getElementById('share-cancel');
+      const result = document.getElementById('share-result');
+      const urlInput = document.getElementById('share-url');
+      const copyBtn = document.getElementById('share-copy');
+      const errorBox = document.getElementById('share-error');
+
+      function defaultExpiry() {
+        const d = new Date(Date.now() + 24 * 3600 * 1000);
+        const pad = (n) => String(n).padStart(2, '0');
+        return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
+      }
+      expiry.value = defaultExpiry();
+      openBtn.addEventListener('click', () => {
+        if (!expiry.value) expiry.value = defaultExpiry();
+        errorBox.hidden = true;
+        modal.hidden = false;
+      });
+      cancelBtn.addEventListener('click', () => { modal.hidden = true; });
+      modal.addEventListener('click', (e) => { if (e.target === modal) modal.hidden = true; });
+      createBtn.addEventListener('click', async () => {
+        errorBox.hidden = true;
+        result.hidden = true;
+        if (!expiry.value) {
+          errorBox.textContent = '请先选择到期时间';
+          errorBox.hidden = false;
+          return;
+        }
+        try {
+          const res = await fetch('/api/share', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ path: location.pathname, expires: expiry.value }),
+          });
+          if (res.status === 401) {
+            location.href = '/login?next=' + encodeURIComponent(location.pathname);
+            return;
+          }
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || '创建失败');
+          urlInput.value = data.url;
+          result.hidden = false;
+        } catch (err) {
+          errorBox.textContent = err.message;
+          errorBox.hidden = false;
+        }
+      });
+      copyBtn.addEventListener('click', () => {
+        urlInput.select();
+        const done = () => { copyBtn.textContent = '已复制 ✓'; setTimeout(() => { copyBtn.textContent = '复制'; }, 1500); };
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(urlInput.value).then(done).catch(() => { document.execCommand('copy'); done(); });
+        } else {
+          try { document.execCommand('copy'); done(); } catch (_) {}
+        }
+      });
+    })();
+  </script>
+</Base>

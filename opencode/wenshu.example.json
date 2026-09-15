@@ -1,0 +1,4 @@
+{
+  "baseUrl": "http://127.0.0.1:8903",
+  "apiToken": "REPLACE_WITH_SERVER_API_TOKEN"
+}
