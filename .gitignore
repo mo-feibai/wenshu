@@ -49,3 +49,6 @@ deploy_admin2.sh
 # 编辑器/系统
 .DS_Store
 Thumbs.db
+
+# 会话工具运行数据（OpenCode / Magic Context 本地缓存）
+.cortexkit/

@@ -53,7 +53,7 @@ function fmt(text: string, max = 14000): string {
 }
 
 const guardMessageWrite =
-  "文枢文档库受保护：禁止直接编辑文档库文件。请改用 wenshu_* 工具——新建用 wenshu_create；出 vN+1 用 wenshu_new_version；翻转状态用 wenshu_set_status；改主题/摘要/关联用 wenshu_update_meta。"
+  "文枢文档库受保护：禁止直接编辑文档库文件。请改用 wenshu_* 工具——新建用 wenshu_create；出 vN+1 用 wenshu_new_version；翻转状态用 wenshu_set_status；改主题/摘要/关联用 wenshu_update_meta；错别字/措辞微调用 wenshu_patch（不升版）。"
 const guardMessageBash =
   "文枢文档库受保护：bash 中禁止对文档库做写入/变更操作。请改用 wenshu_* 工具；只读查看请用不带重定向的 cat/ls/grep/rg 等。"
 
@@ -92,10 +92,10 @@ export const WenShuPlugin: Plugin = async ({ client }) => {
     tool: {
       wenshu_context: tool({
         description:
-          "文枢：读取全局文档库结构（项目→主题→文档，含状态/版本/日期与待办）。生成或更新文档前先调用，用于确定 project/topic 命名与关联 id。可用 project/topic/query 过滤。返回的 url 字段是站点路径（站点根 http://127.0.0.1:8903）。",
+          "文枢：读取全局文档库结构（项目→主题→文档，含状态/版本/日期与待办）。生成或更新文档前先调用，用于确定 project/topic 命名与关联 id。可用 project/topic/query 过滤。返回的 url 字段是站点路径（站点根 http://192.168.0.71:8903）。",
         args: {
-          project: tool.schema.string().optional().describe("按项目过滤，如 demo-project"),
-          topic: tool.schema.string().optional().describe("按主题过滤，如 示例接口"),
+          project: tool.schema.string().optional().describe("按项目过滤，如 xingtai-smart-store-api"),
+          topic: tool.schema.string().optional().describe("按主题过滤，如 订餐支付"),
           query: tool.schema.string().optional().describe("关键词过滤（标题/主题/摘要/正文片段）"),
         },
         async execute(args) {
@@ -110,7 +110,7 @@ export const WenShuPlugin: Plugin = async ({ client }) => {
       }),
 
       wenshu_read: tool({
-        description: "文枢：读取单篇文档（元数据 + 正文）。id 例如 demo-project/api/示例接口文档。",
+        description: "文枢：读取单篇文档（元数据 + 正文）。id 例如 xingtai-smart-store-api/餐厅/sql/迁移-20260912-订餐支付唯一键。",
         args: {
           id: tool.schema.string().describe("文档 id（文档库相对路径去掉扩展名）"),
         },
@@ -124,20 +124,20 @@ export const WenShuPlugin: Plugin = async ({ client }) => {
         description:
           "文枢：新建文档。sql 类型自动命名 迁移-YYYYMMDD-<topic>.sql 并写入 -- @meta（可用 filename 覆盖文件名）；api/其他类型写入 <title>.md 的 frontmatter。写库后服务自动重建站点并 git 提交。related 必须引用已存在的文档 id（先用 wenshu_context 查询）。",
         args: {
-          project: tool.schema.string().describe("项目名，如 demo-project"),
-          topic: tool.schema.string().describe("主题（功能主题，如 示例接口）"),
+          project: tool.schema.string().describe("项目名，如 xingtai-smart-store-api"),
+          topic: tool.schema.string().describe("主题（功能主题，如 订餐支付）"),
           type: tool.schema
             .enum(["sql", "api", "adr", "analysis", "scheme", "report", "other"])
             .describe("文档类型"),
           title: tool.schema.string().describe("标题（sql 类型用于命名提示，api 类型即文件名）"),
           content: tool.schema.string().describe("正文：sql 为原始 SQL 脚本；其他为 Markdown 正文（不含 frontmatter）"),
-          domain: tool.schema.string().optional().describe("领域/子目录，如 示例域（可省略）"),
+          domain: tool.schema.string().optional().describe("领域/子目录，如 餐厅（可省略）"),
           status: tool.schema.string().optional().describe("初始状态：sql[pending|executed] api[pending|implemented] 等"),
           related: tool.schema.array(tool.schema.string()).optional().describe("关联文档 id 数组"),
           summary: tool.schema.string().optional().describe("一句话摘要"),
           date: tool.schema.string().optional().describe("日期 YYYY-MM-DD（默认今天）"),
           version: tool.schema.number().optional().describe("版本号（一般 API 文档用）"),
-          filename: tool.schema.string().optional().describe("显式文件名（sql 类型专用，如 迁移-20260901-示例建表.sql）"),
+          filename: tool.schema.string().optional().describe("显式文件名（sql 类型专用，如 迁移-20260914-订餐支付.sql）"),
         },
         async execute(args) {
           const cfg = requireCfg()
@@ -147,12 +147,12 @@ export const WenShuPlugin: Plugin = async ({ client }) => {
 
       wenshu_new_version: tool({
         description:
-          "文枢：为已有文档出新版本。API 文档生成 vN+1（全量快照）并回填旧版 superseded_by；SQL 追加新迁移文件并默认关联旧脚本。写库后自动重建并提交。changes 必填：一条一个改动点（前端据此知道要改哪些接口）；服务端会自动注入「## 本版变更」（SQL 为 -- 注释）到正文，content 里不要重复写。",
+          "文枢：为已有文档出新版本。API 文档生成 vN+1（全量快照）并回填旧版 superseded_by/archived；SQL 追加新迁移文件并默认关联旧脚本。写库后自动重建并提交。changes 必填：一条一个改动点（前端据此知道要改哪些接口）；服务端会自动注入「## 本版变更」（SQL 为 -- 注释）到正文，content 里不要重复写。**升版门槛（务必遵守）**：仅当「当前版本已实现（status=implemented/executed，前端已对接）」且「改动量较大（新增/删除接口、接口契约实质变化、大范围改写）」时才升版；未实现版本（pending/draft）或措辞/描述/示例/口径类小改动，一律改用 wenshu_patch（不升版）。",
         args: {
           id: tool.schema.string().describe("被版本化的文档 id"),
           changes: tool.schema
             .array(tool.schema.string())
-            .describe("本版变更清单（必填，一条一个改动点，如「请求新增 sort 参数」）"),
+            .describe("本版变更清单（必填，一条一个改动点，如「4.3 全部人员记录：出参新增 6 个字段」）"),
           content: tool.schema.string().describe("新版本完整正文（Markdown 或 SQL），不含「本版变更」小节"),
           title: tool.schema.string().optional().describe("新版本标题（默认原标题+vN）"),
           status: tool.schema.string().optional().describe("新版本初始状态，默认 pending"),
@@ -167,7 +167,7 @@ export const WenShuPlugin: Plugin = async ({ client }) => {
             .map((c) => String(c).trim())
             .filter(Boolean)
           if (!changes.length) {
-            throw new Error("changes 必填：请提供本版变更清单（一条一个改动点，如「请求新增 sort 参数」）")
+            throw new Error("changes 必填：请提供本版变更清单（一条一个改动点，如「4.3 出参新增 6 个字段」）")
           }
           return fmt(await callApi(cfg, "/api/admin/version", "POST", { ...args, changes }))
         },
@@ -204,6 +204,26 @@ export const WenShuPlugin: Plugin = async ({ client }) => {
         async execute(args) {
           const cfg = requireCfg()
           return fmt(await callApi(cfg, "/api/admin/meta", "POST", args))
+        },
+      }),
+
+      wenshu_patch: tool({
+        description:
+          "文枢：给当前版文档打补丁（不改版本号、不出新版）。**改文档默认用这个**：措辞/描述/示例/口径等小改动都用补丁（最多 5 条、合计 ≤800 字）；bulk:true 放宽到 40 条、单条 ≤20000 字、合计 ≤20000 字（批量维护、大改但当前版未实现时使用，reason 写明用途）。edits 为精确替换数组：每条 find 必须在正文中恰好命中 1 次；reason 必填并写入 git 记录。仅当「当前版本已实现且改动量较大」才改用 wenshu_new_version；SQL 文档、已被新版替代的历史版本、归档文档会被拒绝。",
+        args: {
+          id: tool.schema.string().describe("文档 id"),
+          reason: tool.schema.string().describe("补丁原因（必填，一句话；写入 git commit）"),
+          edits: tool.schema
+            .array(tool.schema.object({ find: tool.schema.string(), replace: tool.schema.string() }))
+            .describe("精确替换列表：find 必须在正文中恰好命中 1 次，replace 可为空串（删除）"),
+          bulk: tool.schema
+            .boolean()
+            .optional()
+            .describe("维护模式：仅用于规范回补等批量修改（放宽至 40 条/20000 字），日常微调不要使用"),
+        },
+        async execute(args) {
+          const cfg = requireCfg()
+          return fmt(await callApi(cfg, "/api/admin/patch", "POST", args))
         },
       }),
 

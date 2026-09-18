@@ -283,7 +283,21 @@ def save_entry_fields(entry, fields: dict):
 
 
 CHANGELOG_RE = re.compile(r"^##\s+本版变更\s*$", re.M)
-NEXT_SECTION_RE = re.compile(r"^#{1,2}\s+", re.M)
+ITEM_RE = re.compile(r"^(?:[-*+]|\d+\.)\s+")
+
+
+def changelog_list_end(text: str, start: int) -> int:
+    """从 start 起，吃掉空行与连续列表项；遇到任何非列表内容立即停止（绝不越界删除）。"""
+    end = start
+    for m in re.finditer(r"[^\n]*\n?", text[start:]):
+        stripped = m.group(0).strip()
+        if stripped == "":
+            continue
+        if ITEM_RE.match(stripped):
+            end = start + m.end()
+            continue
+        break
+    return end
 
 
 def changelog_md(changes) -> str:
@@ -295,10 +309,10 @@ def inject_changelog_md(rest: str, changes) -> str:
     section = changelog_md(changes)
     m = CHANGELOG_RE.search(rest)
     if m:
-        tail = rest[m.end():]
-        nxt = NEXT_SECTION_RE.search(tail)
-        end = m.end() + (nxt.start() if nxt else len(tail))
-        return rest[:m.start()] + section + tail[end:].lstrip("\n")
+        head_end = rest.find("\n", m.end())
+        head_end = len(rest) if head_end == -1 else head_end + 1
+        end = changelog_list_end(rest, head_end)
+        return rest[:m.start()] + section + rest[end:].lstrip("\n")
     m1 = re.match(r"(#\s+[^\n]*\n)", rest)
     if m1:
         return rest[:m1.end()] + "\n" + section + rest[m1.end():].lstrip("\n")
@@ -308,7 +322,7 @@ def inject_changelog_md(rest: str, changes) -> str:
 def inject_changelog_sql(rest: str, changes) -> str:
     items = "\n".join("--   - " + str(c).strip() for c in changes if str(c).strip())
     block = f"-- 本版变更:\n{items}\n\n"
-    m = re.search(r"^--\s*本版变更[^\n]*\n(?:--[^\n]*\n)*", rest, re.M)
+    m = re.search(r"^--\s*本版变更[^\n]*\n(?:--\s*-\s[^\n]*\n)*", rest, re.M)
     if m:
         return rest[:m.start()] + block + rest[m.end():].lstrip("\n")
     return block + rest.lstrip("\n")
@@ -786,10 +800,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 raise ApiError(400, "reason 必填（一句话说明补丁原因，会写入 git 记录）")
             if len(reason) > 200:
                 raise ApiError(400, "reason 不能超过 200 字")
+            bulk = bool(payload.get("bulk"))
+            max_items, max_one, max_total = (40, 20000, 20000) if bulk else (5, 300, 800)
             if not isinstance(edits, list) or not edits:
-                raise ApiError(400, "edits 必须是非空数组（1~5 条 {find, replace}）")
-            if len(edits) > 5:
-                raise ApiError(400, "最多 5 条替换；改动较大请走 wenshu_new_version")
+                raise ApiError(400, "edits 必须是非空数组（{find, replace} 列表）")
+            if len(edits) > max_items:
+                raise ApiError(400, f"最多 {max_items} 条替换；超出补丁上限时：未实现版本请分批补丁，已实现版本再考虑升版")
             clean, total = [], 0
             for i, ed in enumerate(edits):
                 if not isinstance(ed, dict):
@@ -798,12 +814,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 replace = str(ed.get("replace", ""))
                 if not find:
                     raise ApiError(400, f"第 {i + 1} 条 find 不能为空")
-                if len(find) > 300 or len(replace) > 300:
-                    raise ApiError(400, f"第 {i + 1} 条替换超过 300 字；改动较大请走 wenshu_new_version")
+                if len(find) > max_one or len(replace) > max_one:
+                    raise ApiError(400, f"第 {i + 1} 条替换超过 {max_one} 字；超出补丁上限时：未实现版本请分批补丁，已实现版本再考虑升版")
                 total += len(find) + len(replace)
                 clean.append((find, replace))
-            if total > 800:
-                raise ApiError(400, "替换合计超过 800 字；改动较大请走 wenshu_new_version")
+            if total > max_total:
+                raise ApiError(400, f"替换合计超过 {max_total} 字；超出补丁上限时：未实现版本请分批补丁，已实现版本再考虑升版")
             entry = find_entry(entries, doc_id)
             if not entry:
                 raise ApiError(404, "文档不存在: " + doc_id)
