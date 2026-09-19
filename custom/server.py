@@ -601,6 +601,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             status = str(payload.get("status", DEFAULT_STATUS[dtype])).strip()
             if status not in STATUS_SETS[dtype]:
                 raise ApiError(400, f"{dtype} 的状态只能是 {STATUS_SETS[dtype]}")
+            if status == "archived":
+                raise ApiError(400, "新建文档不能直接置为 archived（归档只能来自升版自动归档或后续人工状态操作）")
             related = payload.get("related") or []
             if not isinstance(related, list):
                 raise ApiError(400, "related 必须是数组")
@@ -665,7 +667,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 raise ApiError(404, "文档不存在: " + src_id)
             meta = entry["meta"]
             dtype = str(meta.get("type", "other"))
+            status = str(meta.get("status") or "").strip()
             changes = payload.get("changes")
+            if dtype == "sql":
+                if status != "executed":
+                    raise ApiError(400, f"当前 SQL 状态为「{status or '未设置'}」：未执行（pending）的 SQL 请用 wenshu_update 或 wenshu_patch 原地修改，仅已执行（executed）后才出新迁移")
+            elif dtype == "api":
+                if status != "implemented":
+                    raise ApiError(400, f"当前接口文档状态为「{status or '未设置'}」：未实现（pending/draft）请用 wenshu_update 或 wenshu_patch 原地修改，仅已实现（implemented）且改动较大时才升版")
+                if payload.get("major_change") is not True:
+                    raise ApiError(400, "升版被拒：需要明确声明 major_change=true（仅当当前版本已实现且改动较大：新增/删除接口、契约实质变化或大范围改写）")
+                if not (isinstance(changes, list) and [c for c in changes if str(c).strip()]):
+                    raise ApiError(400, "升版被拒：必须填写 changes（一条一个改动点）")
             if isinstance(changes, list) and [c for c in changes if str(c).strip()]:
                 content = inject_changelog_sql(content, changes) if dtype == "sql" else inject_changelog_md(content, changes)
             old_version = int(meta.get("version") or 0)
@@ -823,16 +836,22 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             entry = find_entry(entries, doc_id)
             if not entry:
                 raise ApiError(404, "文档不存在: " + doc_id)
-            if entry["kind"] != "md":
-                raise ApiError(400, "SQL 文档不支持补丁（已执行脚本不可就地修改），请出新迁移")
             meta = entry["meta"]
             if str(meta.get("superseded_by") or "").strip():
                 raise ApiError(400, "该文档已被新版替代（历史版本），请对当前版打补丁或出新版")
-            if str(meta.get("status") or "") == "archived":
+            status = str(meta.get("status") or "").strip()
+            if status == "archived":
                 raise ApiError(400, "归档文档不可修改，请出新版")
-            cur_meta, rest = parse_md(entry["text"])
-            if cur_meta is None:
-                raise ApiError(400, "文档格式异常（缺少 frontmatter）")
+            if entry["kind"] == "sql":
+                if status != "pending":
+                    raise ApiError(400, "仅未执行（pending）的 SQL 可打补丁；已执行脚本不可就地修改，请出新迁移")
+                cur_meta, rest = parse_sql_meta(entry["text"])
+                if cur_meta is None:
+                    raise ApiError(400, "文档格式异常（缺少 -- @meta）")
+            else:
+                cur_meta, rest = parse_md(entry["text"])
+                if cur_meta is None:
+                    raise ApiError(400, "文档格式异常（缺少 frontmatter）")
             for i, (find, replace) in enumerate(clean):
                 n = rest.count(find)
                 if n != 1:
@@ -842,13 +861,68 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             updated = datetime.date.today().isoformat()
             meta["revision"] = revision
             meta["updated"] = updated
-            text = render_md(meta, rest)
+            text = render_sql_meta(meta, rest) if entry["kind"] == "sql" else render_md(meta, rest)
             entry["path"].write_text(text, encoding="utf-8")
             entry["text"] = text
             entry["meta"].update({"revision": revision, "updated": updated})
             return {"id": entry["id"], "patches": len(clean), "reason": reason,
                     "revision": revision, "updated": updated, "url": doc_url(entry["id"]),
                     "commit_message": f"chore: 补丁 {entry['id']} — {reason}（不升版）"}
+
+        return self.admin_write(mutate)
+
+    def admin_update(self, payload):
+        def mutate(entries):
+            doc_id = str(payload.get("id", "")).strip()
+            content = str(payload.get("content", ""))
+            reason = str(payload.get("reason", "")).strip()
+            if not doc_id:
+                raise ApiError(400, "id 必填")
+            if not content.strip():
+                raise ApiError(400, "content 必填")
+            if not reason:
+                raise ApiError(400, "reason 必填（一句话说明本次更新，会写入 git 记录）")
+            if len(reason) > 200:
+                raise ApiError(400, "reason 不能超过 200 字")
+            entry = find_entry(entries, doc_id)
+            if not entry:
+                raise ApiError(404, "文档不存在: " + doc_id)
+            meta = entry["meta"]
+            status = str(meta.get("status") or "").strip()
+            if str(meta.get("superseded_by") or "").strip():
+                raise ApiError(400, "该文档已被新版替代（历史版本），不可原地更新")
+            if status == "archived":
+                raise ApiError(400, "归档文档不可修改，请出新版")
+            if status not in ("pending", "draft"):
+                raise ApiError(400, f"仅未实现/未定稿（pending/draft）的文档可原地完整更新；当前状态「{status or '未设置'}」，小改动请用 wenshu_patch，已实现且改动较大请升版")
+            exp = payload.get("expected_revision")
+            cur_rev = int(meta.get("revision") or 0)
+            if exp is not None and int(exp) != cur_rev:
+                raise ApiError(409, f"revision 不匹配（当前 {cur_rev}，传入 {int(exp)}）：文档可能已被更新，请重新读取后再提交")
+            changes = payload.get("changes")
+            if changes is not None:
+                if not isinstance(changes, list) or not [c for c in changes if str(c).strip()]:
+                    raise ApiError(400, "changes 必须是非空数组")
+                changes = [str(c).strip() for c in changes if str(c).strip()]
+            revision = cur_rev + 1
+            updated = datetime.date.today().isoformat()
+            meta["revision"] = revision
+            meta["updated"] = updated
+            body = content.lstrip("\n")
+            if entry["kind"] == "sql":
+                if changes is not None:
+                    body = inject_changelog_sql(body, changes)
+                text = render_sql_meta(meta, body)
+            else:
+                if changes is not None:
+                    body = inject_changelog_md(body, changes)
+                text = render_md(meta, "\n" + body.lstrip("\n"))
+            entry["path"].write_text(text, encoding="utf-8")
+            entry["text"] = text
+            entry["meta"].update({"revision": revision, "updated": updated})
+            return {"id": entry["id"], "mode": "updated", "revision": revision, "updated": updated,
+                    "url": doc_url(entry["id"]), "status": status,
+                    "commit_message": f"chore: 原地更新 {entry['id']} — {reason}（不升版）"}
 
         return self.admin_write(mutate)
 
@@ -984,6 +1058,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self.admin_meta(payload)
             if parsed.path == "/api/admin/patch":
                 return self.admin_patch(payload)
+            if parsed.path == "/api/admin/update":
+                return self.admin_update(payload)
             if parsed.path == "/api/admin/delete":
                 return self.admin_delete(payload)
             return self.json_response(404, {"error": "unknown admin endpoint"})

@@ -154,7 +154,7 @@ def main():
                 "project": meta.get("project", ""),
                 "topic": meta.get("topic", ""),
                 "type": "sql",
-                "status": meta.get("status", "executed"),
+                "status": meta.get("status", "pending"),
                 "date": meta.get("date", ""),
                 "attachment": "/files/" + fname,
             }
@@ -162,6 +162,10 @@ def main():
                 fm["domain"] = meta["domain"]
             if meta.get("version"):
                 fm["version"] = int(meta["version"])
+            if meta.get("revision"):
+                fm["revision"] = int(meta["revision"])
+            if meta.get("updated"):
+                fm["updated"] = meta["updated"]
             if related:
                 fm["related"] = related
             if att:

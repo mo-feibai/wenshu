@@ -53,7 +53,7 @@ function fmt(text: string, max = 14000): string {
 }
 
 const guardMessageWrite =
-  "文枢文档库受保护：禁止直接编辑文档库文件。请改用 wenshu_* 工具——新建用 wenshu_create；出 vN+1 用 wenshu_new_version；翻转状态用 wenshu_set_status；改主题/摘要/关联用 wenshu_update_meta；错别字/措辞微调用 wenshu_patch（不升版）。"
+  "文枢文档库受保护：禁止直接编辑文档库文件。请改用 wenshu_* 工具——新建用 wenshu_create；原地改未完成文档（pending/draft）用 wenshu_update；错别字/措辞微调用 wenshu_patch（不升版）；已实现/已执行的大改动才用 wenshu_new_version；翻转状态用 wenshu_set_status；改主题/摘要/关联用 wenshu_update_meta。"
 const guardMessageBash =
   "文枢文档库受保护：bash 中禁止对文档库做写入/变更操作。请改用 wenshu_* 工具；只读查看请用不带重定向的 cat/ls/grep/rg 等。"
 
@@ -147,13 +147,17 @@ export const WenShuPlugin: Plugin = async ({ client }) => {
 
       wenshu_new_version: tool({
         description:
-          "文枢：为已有文档出新版本。API 文档生成 vN+1（全量快照）并回填旧版 superseded_by/archived；SQL 追加新迁移文件并默认关联旧脚本。写库后自动重建并提交。changes 必填：一条一个改动点（前端据此知道要改哪些接口）；服务端会自动注入「## 本版变更」（SQL 为 -- 注释）到正文，content 里不要重复写。**升版门槛（务必遵守）**：仅当「当前版本已实现（status=implemented/executed，前端已对接）」且「改动量较大（新增/删除接口、接口契约实质变化、大范围改写）」时才升版；未实现版本（pending/draft）或措辞/描述/示例/口径类小改动，一律改用 wenshu_patch（不升版）。",
+          "文枢：为已有文档出新版本（严格门槛，服务端强制）。API：必须当前 status=implemented，且显式传 major_change=true 并填写 changes（仅新增/删除接口、契约实质变化、大范围改写）。SQL：必须当前 status=executed（未执行的 SQL 请用 wenshu_update 原地改）。未实现/未执行的文档调用会被服务端拒绝——改未完成内容用 wenshu_update，改措辞/示例用 wenshu_patch。API 升版生成 vN+1（全量快照）并自动归档旧版；SQL 追加新迁移文件并默认关联旧脚本。changes 一条一个改动点（前端据此知道要改哪些接口）；服务端自动注入「本版变更」（SQL 为 -- 注释），content 里不要重复写。",
         args: {
           id: tool.schema.string().describe("被版本化的文档 id"),
           changes: tool.schema
             .array(tool.schema.string())
             .describe("本版变更清单（必填，一条一个改动点，如「4.3 全部人员记录：出参新增 6 个字段」）"),
           content: tool.schema.string().describe("新版本完整正文（Markdown 或 SQL），不含「本版变更」小节"),
+          major_change: tool.schema
+            .boolean()
+            .optional()
+            .describe("API 升版闸门：仅当当前版本已实现且改动较大时传 true（服务端强制校验）"),
           title: tool.schema.string().optional().describe("新版本标题（默认原标题+vN）"),
           status: tool.schema.string().optional().describe("新版本初始状态，默认 pending"),
           date: tool.schema.string().optional().describe("日期 YYYY-MM-DD（默认今天）"),
@@ -170,6 +174,28 @@ export const WenShuPlugin: Plugin = async ({ client }) => {
             throw new Error("changes 必填：请提供本版变更清单（一条一个改动点，如「4.3 出参新增 6 个字段」）")
           }
           return fmt(await callApi(cfg, "/api/admin/version", "POST", { ...args, changes }))
+        },
+      }),
+
+      wenshu_update: tool({
+        description:
+          "文枢：原地完整更新未完成的文档（不升版、不换 ID、不改状态）。仅 pending/draft（未实现接口、未执行 SQL、未定稿方案）可用；保留原版本号与关联，写入 revision+1 与 updated（页面显示「最近修订」）。pending SQL 直接改原脚本、不新建迁移。整篇重写优先用本工具；零散小改动用 wenshu_patch；已实现/已执行的大改动才用 wenshu_new_version。content 传不含 frontmatter/-- @meta 的完整正文（可从 wenshu_read 获取）；changes 可选（提供则替换「本版变更」小节）；expected_revision 可选做乐观锁。",
+        args: {
+          id: tool.schema.string().describe("文档 id"),
+          content: tool.schema.string().describe("新的完整正文（Markdown 或 SQL，不含 frontmatter/-- @meta）"),
+          reason: tool.schema.string().describe("更新原因（必填，一句话；写入 git commit）"),
+          changes: tool.schema
+            .array(tool.schema.string())
+            .optional()
+            .describe("本版变更清单（可选；提供则替换正文中的「本版变更」小节，一条一个改动点）"),
+          expected_revision: tool.schema
+            .number()
+            .optional()
+            .describe("乐观锁：传入当前 revision（wenshu_read 可见），不匹配则拒绝"),
+        },
+        async execute(args) {
+          const cfg = requireCfg()
+          return fmt(await callApi(cfg, "/api/admin/update", "POST", args))
         },
       }),
 
@@ -209,7 +235,7 @@ export const WenShuPlugin: Plugin = async ({ client }) => {
 
       wenshu_patch: tool({
         description:
-          "文枢：给当前版文档打补丁（不改版本号、不出新版）。**改文档默认用这个**：措辞/描述/示例/口径等小改动都用补丁（最多 5 条、合计 ≤800 字）；bulk:true 放宽到 40 条、单条 ≤20000 字、合计 ≤20000 字（批量维护、大改但当前版未实现时使用，reason 写明用途）。edits 为精确替换数组：每条 find 必须在正文中恰好命中 1 次；reason 必填并写入 git 记录。仅当「当前版本已实现且改动量较大」才改用 wenshu_new_version；SQL 文档、已被新版替代的历史版本、归档文档会被拒绝。",
+          "文枢：给当前版文档打补丁（不改版本号、不出新版）。**改文档默认用这个**：措辞/描述/示例/口径等小改动都用补丁（最多 5 条、合计 ≤800 字）；bulk:true 放宽到 40 条、单条 ≤20000 字、合计 ≤20000 字（批量维护、大改但当前版未实现时使用，reason 写明用途）。edits 为精确替换数组：每条 find 必须在正文中恰好命中 1 次；reason 必填并写入 git 记录。仅当「当前版本已实现且改动量较大」才改用 wenshu_new_version（需 major_change=true）；未完成的文档整篇重写用 wenshu_update。未执行（pending）的 SQL 可打补丁，已执行 SQL（请出新迁移）、已被新版替代的历史版本、归档文档会被拒绝。",
         args: {
           id: tool.schema.string().describe("文档 id"),
           reason: tool.schema.string().describe("补丁原因（必填，一句话；写入 git commit）"),
