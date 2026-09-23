@@ -438,6 +438,13 @@ mark.w-del { background: color-mix(in srgb, var(--red) 30%, transparent); }
 .share-card h3 { margin: 0 0 6px; font-size: 16px; }
 .share-card .hint { margin: 0 0 16px; color: var(--muted); font-size: 12px; }
 .share-card .field { display: flex; flex-direction: column; gap: 8px; font-size: 12px; color: var(--muted); }
+.share-quick { display: flex; gap: 6px; margin-top: 10px; }
+.share-quick .quick-btn {
+  padding: 4px 10px; border: 1px solid var(--border); border-radius: 999px;
+  background: transparent; color: var(--muted); font-size: 12px; cursor: pointer;
+}
+.share-quick .quick-btn:hover { border-color: var(--accent); color: var(--accent); }
+.share-quick .quick-btn.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
 .share-card input[type='datetime-local'],
 .share-card input[type='text'] {
   background: var(--card-2); color: var(--text); border: 1px solid var(--border);

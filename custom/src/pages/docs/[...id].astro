@@ -200,6 +200,12 @@ const flipCopy = `请将文枢文档「${entry.data.title}」的状态从 pendin
       <label class="field">到期时间
         <input type="datetime-local" id="share-expiry" />
       </label>
+      <div class="share-quick" id="share-quick">
+        <button type="button" class="quick-btn" data-days="1">1 天</button>
+        <button type="button" class="quick-btn" data-days="7">7 天</button>
+        <button type="button" class="quick-btn" data-days="30">30 天</button>
+        <button type="button" class="quick-btn" data-days="3650">永久</button>
+      </div>
       <div class="actions">
         <button class="copy-btn" id="share-create">创建链接</button>
         <button class="copy-btn" id="share-cancel">取消</button>
@@ -298,14 +304,21 @@ const flipCopy = `请将文枢文档「${entry.data.title}」的状态从 pendin
       const copyBtn = document.getElementById('share-copy');
       const errorBox = document.getElementById('share-error');
 
-      function defaultExpiry() {
-        const d = new Date(Date.now() + 24 * 3600 * 1000);
+      function expiryFromDays(days) {
+        const d = new Date(Date.now() + days * 24 * 3600 * 1000);
         const pad = (n) => String(n).padStart(2, '0');
         return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()) + 'T' + pad(d.getHours()) + ':' + pad(d.getMinutes());
       }
-      expiry.value = defaultExpiry();
+      const quickBtns = Array.from(document.querySelectorAll('#share-quick .quick-btn'));
+      function setDays(days) {
+        expiry.value = expiryFromDays(days);
+        quickBtns.forEach((b) => b.classList.toggle('active', Number(b.dataset.days) === days));
+      }
+      quickBtns.forEach((b) => b.addEventListener('click', () => setDays(Number(b.dataset.days))));
+      expiry.addEventListener('input', () => quickBtns.forEach((b) => b.classList.remove('active')));
+      setDays(7);
       openBtn.addEventListener('click', () => {
-        if (!expiry.value) expiry.value = defaultExpiry();
+        if (!expiry.value) setDays(7);
         errorBox.hidden = true;
         modal.hidden = false;
       });

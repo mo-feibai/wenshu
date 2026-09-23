@@ -1029,6 +1029,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             expires_raw = payload.get("expires", "")
             if not isinstance(target, str) or not target.startswith("/docs/"):
                 return self.json_response(400, {"error": "只能分享单篇文档"})
+            target = urllib.parse.quote(urllib.parse.unquote(target), safe="/")
             try:
                 exp_ts = datetime.datetime.fromisoformat(expires_raw).timestamp()
             except Exception:
