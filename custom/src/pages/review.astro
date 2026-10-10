@@ -1,0 +1,88 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base>
+  <section class="hero">
+    <h1>淘汰审阅</h1>
+    <p>已失效 + 闲置时间长的文档，分阶段淘汰：标记过期 → 淘汰隐藏 → 删除。删除需人工确认。</p>
+  </section>
+
+  <div id="review-app">
+    <div style="color:var(--muted);text-align:center;padding:24px">加载中…</div>
+  </div>
+</Base>
+
+<script is:inline>
+  const app = document.getElementById('review-app');
+  const STAGE_LABEL = { delete_pending: '待删除', retire_pending: '待淘汰', candidate: '候选', review_only: '人工审阅' };
+  const CLS_LABEL = { A1: '历史版本', A2: '独立归档', B: '僵尸待办', C: '孤儿', D: '一次性', E: '废弃当前版' };
+  const ACTION_LABEL = { candidate: '标记过期', retire_pending: '淘汰隐藏', delete_pending: '建议删除', review_only: '人工审阅' };
+
+  function esc(s) {
+    return String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  }
+  function instruction(c) {
+    if (c.stage === 'delete_pending') return '确认删除文档「' + c.title + '」（id=' + c.id + '）。删除后 git 历史可恢复。';
+    if (c.stage === 'retire_pending') return '请将文档「' + c.title + '」淘汰隐藏（wenshu_retire, action=retired, id=' + c.id + '）。';
+    return '请将文档「' + c.title + '」标记过期（wenshu_retire, action=stale, id=' + c.id + '）。';
+  }
+  function render(data) {
+    const cands = data.candidates || [];
+    let html = '';
+    for (const g of ['delete_pending', 'retire_pending', 'candidate', 'review_only']) {
+      const items = cands.filter((c) => c.stage === g);
+      if (!items.length) continue;
+      html += '<h2 class="section-title">' + STAGE_LABEL[g] + '（' + items.length + '）</h2>';
+      html += '<table class="pending-table"><tbody>';
+      for (const c of items) {
+        html += '<tr>' +
+          '<td><span class="badge type">' + (CLS_LABEL[c.cls] || c.cls) + '</span></td>' +
+          '<td><a href="' + c.url + '">' + esc(c.title) + '</a></td>' +
+          '<td class="mono" style="color:var(--muted)">闲置 ' + c.idle + ' 天</td>' +
+          '<td class="mono" style="color:var(--muted)">' + c.last_active + '</td>' +
+          '<td>' + (ACTION_LABEL[c.stage] || '') + '</td>' +
+          '<td><button class="copy-btn" data-label="复制指令" data-copy="' + esc(instruction(c)) + '">复制指令</button></td>' +
+          '</tr>';
+      }
+      html += '</tbody></table>';
+    }
+    if (!cands.length) {
+      html += '<p style="color:var(--muted);text-align:center;padding:24px">暂无候选文档 🎉</p>';
+    }
+    const dels = data.recent_deletions || [];
+    if (dels.length) {
+      html += '<h2 class="section-title">最近删除（' + dels.length + '）</h2>';
+      html += '<table class="pending-table"><tbody>';
+      for (const d of dels) {
+        html += '<tr>' +
+          '<td class="mono" style="color:var(--muted)">' + d.date + '</td>' +
+          '<td>' + esc(d.file) + '</td>' +
+          '<td class="mono" style="color:var(--muted)">' + esc(d.message) + '</td>' +
+          '<td><button class="copy-btn" data-label="复制恢复指令" data-copy="恢复已删除文档 ' + esc(d.file) + '（git show ' + d.sha + ':' + esc(d.file) + '）">复制恢复指令</button></td>' +
+          '</tr>';
+      }
+      html += '</tbody></table>';
+    }
+    app.innerHTML = html;
+    app.querySelectorAll('.copy-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const text = btn.dataset.copy;
+        if (navigator.clipboard) navigator.clipboard.writeText(text).then(() => {
+          btn.textContent = '已复制 ✓';
+          setTimeout(() => { btn.textContent = btn.dataset.label || '复制指令'; }, 1500);
+        });
+      });
+    });
+  }
+  async function load() {
+    try {
+      const res = await fetch('/api/review');
+      if (!res.ok) throw new Error('HTTP ' + res.status);
+      render(await res.json());
+    } catch (err) {
+      app.innerHTML = '<p style="color:#f87171;text-align:center;padding:24px">加载失败：' + esc(err.message) + '</p>';
+    }
+  }
+  load();
+</script>

@@ -57,7 +57,253 @@ const guardMessageWrite =
 const guardMessageBash =
   "文枢文档库受保护：bash 中禁止对文档库做写入/变更操作。请改用 wenshu_* 工具；只读查看请用不带重定向的 cat/ls/grep/rg 等。"
 
-export const WenShuPlugin: Plugin = async ({ client }) => {
+/** 共用守卫：写类工具命中文档库路径、或 bash 命中文档库写入类命令时抛出拦截 */
+function guardCore(toolName: string, args: Record<string, unknown>): void {
+  if (WRITE_TOOLS.has(toolName)) {
+    const target = String(args.filePath ?? args.path ?? args.file ?? "")
+    if (target && isDocsPath(target)) throw new Error(guardMessageWrite)
+  }
+  if (toolName === "bash" || toolName === "shell") {
+    const cmd = String(args.command ?? "")
+    if (cmd && isDocsPath(cmd)) {
+      const trimmed = cmd.trim()
+      if (!READONLY_BASH.test(trimmed) || WRITE_BASH.test(cmd)) throw new Error(guardMessageBash)
+    }
+  }
+}
+
+// ---- 工具定义（v1/v2 共用；@opencode-ai/plugin 的 tool() 返回 v2 也接受的 Tool.Info） ----
+
+const tools = {
+  wenshu_context: tool({
+    id: "wenshu_context",
+    description:
+      "文枢：读取全局文档库结构（项目→主题→文档，含状态/版本/日期与待办）。生成或更新文档前先调用，用于确定 project/topic 命名与关联 id。可用 project/topic/query 过滤。返回的 url 字段是站点路径（站点根 http://192.168.0.71:8903）。",
+    args: {
+      project: tool.schema.string().optional().describe("按项目过滤，如 xingtai-smart-store-api"),
+      topic: tool.schema.string().optional().describe("按主题过滤，如 订餐支付"),
+      query: tool.schema.string().optional().describe("关键词过滤（标题/主题/摘要/正文片段）"),
+    },
+    async execute(args) {
+      const cfg = loadCfg()
+      if (!cfg) throw new Error(`文枢配置缺失：请创建 ${CFG_PATH}（baseUrl + apiToken）后重启 opencode`)
+      const qs = new URLSearchParams()
+      if (args.project) qs.set("project", args.project)
+      if (args.topic) qs.set("topic", args.topic)
+      if (args.query) qs.set("query", args.query)
+      const q = qs.toString()
+      return fmt(await callApi(cfg, "/api/admin/context" + (q ? `?${q}` : "")))
+    },
+  }),
+
+  wenshu_read: tool({
+    id: "wenshu_read",
+    description: "文枢：读取单篇文档（元数据 + 正文）。id 例如 xingtai-smart-store-api/餐厅/sql/迁移-20260912-订餐支付唯一键。",
+    args: {
+      id: tool.schema.string().describe("文档 id（文档库相对路径去掉扩展名）"),
+    },
+    async execute(args) {
+      const cfg = loadCfg()
+      if (!cfg) throw new Error(`文枢配置缺失：请创建 ${CFG_PATH}（baseUrl + apiToken）后重启 opencode`)
+      return fmt(await callApi(cfg, `/api/admin/doc?id=${encodeURIComponent(args.id)}`))
+    },
+  }),
+
+  wenshu_create: tool({
+    id: "wenshu_create",
+    description:
+      "文枢：新建文档。sql 类型自动命名 迁移-YYYYMMDD-<topic>.sql 并写入 -- @meta（可用 filename 覆盖文件名）；api/其他类型写入 <title>.md 的 frontmatter。写库后服务自动重建站点并 git 提交。related 必须引用已存在的文档 id（先用 wenshu_context 查询）。",
+    args: {
+      project: tool.schema.string().describe("项目名，如 xingtai-smart-store-api"),
+      topic: tool.schema.string().describe("主题（功能主题，如 订餐支付）"),
+      type: tool.schema
+        .enum(["sql", "api", "adr", "analysis", "scheme", "report", "other"])
+        .describe("文档类型"),
+      title: tool.schema.string().describe("标题（sql 类型用于命名提示，api 类型即文件名）"),
+      content: tool.schema.string().describe("正文：sql 为原始 SQL 脚本；其他为 Markdown 正文（不含 frontmatter）"),
+      domain: tool.schema.string().optional().describe("领域/子目录，如 餐厅（可省略）"),
+      status: tool.schema.string().optional().describe("初始状态：sql[pending|executed] api[pending|implemented] 等"),
+      related: tool.schema.array(tool.schema.string()).optional().describe("关联文档 id 数组"),
+      summary: tool.schema.string().optional().describe("一句话摘要"),
+      date: tool.schema.string().optional().describe("日期 YYYY-MM-DD（默认今天）"),
+      version: tool.schema.number().optional().describe("版本号（一般 API 文档用）"),
+      filename: tool.schema.string().optional().describe("显式文件名（sql 类型专用，如 迁移-20260914-订餐支付.sql）"),
+    },
+    async execute(args) {
+      const cfg = loadCfg()
+      if (!cfg) throw new Error(`文枢配置缺失：请创建 ${CFG_PATH}（baseUrl + apiToken）后重启 opencode`)
+      return fmt(await callApi(cfg, "/api/admin/create", "POST", args))
+    },
+  }),
+
+  wenshu_new_version: tool({
+    id: "wenshu_new_version",
+    description:
+      "文枢：为已有文档出新版本（严格门槛，服务端强制）。API：必须当前 status=implemented，且显式传 major_change=true 并填写 changes（仅新增/删除接口、契约实质变化、大范围改写）。SQL：必须当前 status=executed（未执行的 SQL 请用 wenshu_update 原地改）。未实现/未执行的文档调用会被服务端拒绝——改未完成内容用 wenshu_update，改措辞/示例用 wenshu_patch。API 升版生成 vN+1（全量快照）并自动归档旧版；SQL 追加新迁移文件并默认关联旧脚本。changes 一条一个改动点（前端据此知道要改哪些接口）；服务端自动注入「本版变更」（SQL 为 -- 注释），content 里不要重复写。",
+    args: {
+      id: tool.schema.string().describe("被版本化的文档 id"),
+      changes: tool.schema
+        .array(tool.schema.string())
+        .describe("本版变更清单（必填，一条一个改动点，如「4.3 全部人员记录：出参新增 6 个字段」）"),
+      content: tool.schema.string().describe("新版本完整正文（Markdown 或 SQL），不含「本版变更」小节"),
+      major_change: tool.schema
+        .boolean()
+        .optional()
+        .describe("API 升版闸门：仅当当前版本已实现且改动较大时传 true（服务端强制校验）"),
+      title: tool.schema.string().optional().describe("新版本标题（默认原标题+vN）"),
+      status: tool.schema.string().optional().describe("新版本初始状态，默认 pending"),
+      date: tool.schema.string().optional().describe("日期 YYYY-MM-DD（默认今天）"),
+      version: tool.schema.number().optional().describe("显式版本号（默认旧版本+1）"),
+      related: tool.schema.array(tool.schema.string()).optional().describe("覆盖新版本的关联 id 数组"),
+      filename: tool.schema.string().optional().describe("SQL 专用：显式文件名"),
+    },
+    async execute(args) {
+      const cfg = loadCfg()
+      if (!cfg) throw new Error(`文枢配置缺失：请创建 ${CFG_PATH}（baseUrl + apiToken）后重启 opencode`)
+      const changes = (Array.isArray(args.changes) ? args.changes : [])
+        .map((c) => String(c).trim())
+        .filter(Boolean)
+      if (!changes.length) {
+        throw new Error("changes 必填：请提供本版变更清单（一条一个改动点，如「4.3 出参新增 6 个字段」）")
+      }
+      return fmt(await callApi(cfg, "/api/admin/version", "POST", { ...args, changes }))
+    },
+  }),
+
+  wenshu_update: tool({
+    id: "wenshu_update",
+    description:
+      "文枢：原地完整更新未完成的文档（不升版、不换 ID、不改状态）。仅 pending/draft（未实现接口、未执行 SQL、未定稿方案）可用；保留原版本号与关联，写入 revision+1 与 updated（页面显示「最近修订」）。pending SQL 直接改原脚本、不新建迁移。整篇重写优先用本工具；零散小改动用 wenshu_patch；已实现/已执行的大改动才用 wenshu_new_version。content 传不含 frontmatter/-- @meta 的完整正文（可从 wenshu_read 获取）；changes 可选（提供则替换「本版变更」小节）；expected_revision 可选做乐观锁。",
+    args: {
+      id: tool.schema.string().describe("文档 id"),
+      content: tool.schema.string().describe("新的完整正文（Markdown 或 SQL，不含 frontmatter/-- @meta）"),
+      reason: tool.schema.string().describe("更新原因（必填，一句话；写入 git commit）"),
+      changes: tool.schema
+        .array(tool.schema.string())
+        .optional()
+        .describe("本版变更清单（可选；提供则替换正文中的「本版变更」小节，一条一个改动点）"),
+      expected_revision: tool.schema
+        .number()
+        .optional()
+        .describe("乐观锁：传入当前 revision（wenshu_read 可见），不匹配则拒绝"),
+    },
+    async execute(args) {
+      const cfg = loadCfg()
+      if (!cfg) throw new Error(`文枢配置缺失：请创建 ${CFG_PATH}（baseUrl + apiToken）后重启 opencode`)
+      return fmt(await callApi(cfg, "/api/admin/update", "POST", args))
+    },
+  }),
+
+  wenshu_set_status: tool({
+    id: "wenshu_set_status",
+    description:
+      "文枢：翻转文档状态。SQL: pending→executed；接口: pending→implemented；ADR: accepted；过程文档: draft→final；均可 →archived。注意：必须先获得用户确认再调用（尤其 executed/implemented）。",
+    args: {
+      id: tool.schema.string().describe("文档 id"),
+      status: tool.schema.string().describe("目标状态：executed / implemented / accepted / final / archived / pending / draft"),
+    },
+    async execute(args) {
+      const cfg = loadCfg()
+      if (!cfg) throw new Error(`文枢配置缺失：请创建 ${CFG_PATH}（baseUrl + apiToken）后重启 opencode`)
+      return fmt(await callApi(cfg, "/api/admin/status", "POST", args))
+    },
+  }),
+
+  wenshu_update_meta: tool({
+    id: "wenshu_update_meta",
+    description:
+      "文枢：更新文档元数据（topic/domain/summary/related/title）或补写「本版变更」（changes：md 文档，服务端插入/替换正文中的该小节）。related 必须引用已存在的 id；空数组可清空关联。",
+    args: {
+      id: tool.schema.string().describe("文档 id"),
+      topic: tool.schema.string().optional().describe("新主题"),
+      domain: tool.schema.string().optional().describe("新领域"),
+      summary: tool.schema.string().optional().describe("新摘要"),
+      title: tool.schema.string().optional().describe("新标题"),
+      related: tool.schema.array(tool.schema.string()).optional().describe("新的关联 id 数组"),
+      changes: tool.schema
+        .array(tool.schema.string())
+        .optional()
+        .describe("本版变更清单（md 文档补写/替换「本版变更」小节；一条一个改动点）"),
+    },
+    async execute(args) {
+      const cfg = loadCfg()
+      if (!cfg) throw new Error(`文枢配置缺失：请创建 ${CFG_PATH}（baseUrl + apiToken）后重启 opencode`)
+      return fmt(await callApi(cfg, "/api/admin/meta", "POST", args))
+    },
+  }),
+
+  wenshu_patch: tool({
+    id: "wenshu_patch",
+    description:
+      "文枢：给当前版文档打补丁（不改版本号、不出新版）。**改文档默认用这个**：措辞/描述/示例/口径等小改动都用补丁（最多 5 条、合计 ≤800 字）；bulk:true 放宽到 40 条、单条 ≤20000 字、合计 ≤20000 字（批量维护、大改但当前版未实现时使用，reason 写明用途）。edits 为精确替换数组：每条 find 必须在正文中恰好命中 1 次；reason 必填并写入 git 记录。仅当「当前版本已实现且改动量较大」才改用 wenshu_new_version（需 major_change=true）；未完成的文档整篇重写用 wenshu_update。未执行（pending）的 SQL 可打补丁，已执行 SQL（请出新迁移）、已被新版替代的历史版本、归档文档会被拒绝。",
+    args: {
+      id: tool.schema.string().describe("文档 id"),
+      reason: tool.schema.string().describe("补丁原因（必填，一句话；写入 git commit）"),
+      edits: tool.schema
+        .array(tool.schema.object({ find: tool.schema.string(), replace: tool.schema.string() }))
+        .describe("精确替换列表：find 必须在正文中恰好命中 1 次，replace 可为空串（删除）"),
+      bulk: tool.schema
+        .boolean()
+        .optional()
+        .describe("维护模式：仅用于规范回补等批量修改（放宽至 40 条/20000 字），日常微调不要使用"),
+    },
+    async execute(args) {
+      const cfg = loadCfg()
+      if (!cfg) throw new Error(`文枢配置缺失：请创建 ${CFG_PATH}（baseUrl + apiToken）后重启 opencode`)
+      return fmt(await callApi(cfg, "/api/admin/patch", "POST", args))
+    },
+  }),
+
+  wenshu_review: tool({
+    id: "wenshu_review",
+    description:
+      "文枢：扫描全库，输出淘汰候选清单（只读）。按「已失效 + 闲置时间长」分类：A1 历史版本（archived+被替代，≥90 天）、A2 独立归档（archived，≥90 天）、B 僵尸待办（pending/draft，≥60 天）、C 孤儿（无引用无附件，≥90 天）、D 一次性（demo/临时/测试，≥7 天）、E 废弃当前版（implemented/final，≥180 天，仅人工审阅）。每项含类别/阶段/闲置天数/最后活跃日/建议动作。守卫自动排除：executed SQL、当前版、被引用、有附件、有未过期分享。",
+    args: {
+      overrides: tool.schema
+        .string()
+        .optional()
+        .describe("测试用：阈值覆盖 JSON，如 {\"T_A1\":1,\"T_B\":1}（仅验证用，日常不要传）"),
+    },
+    async execute(args) {
+      const cfg = loadCfg()
+      if (!cfg) throw new Error(`文枢配置缺失：请创建 ${CFG_PATH}（baseUrl + apiToken）后重启 opencode`)
+      const qs = args.overrides ? `?overrides=${encodeURIComponent(args.overrides)}` : ""
+      return fmt(await callApi(cfg, "/api/admin/review" + qs))
+    },
+  }),
+
+  wenshu_retire: tool({
+    id: "wenshu_retire",
+    description:
+      "文枢：文档生命周期操作（写）。action=stale 标记过期（需先在候选清单，或 force=true+reason）；action=retired 淘汰隐藏（需已 stale 满 7 天，或 force=true+reason）；action=restore 恢复（清除淘汰标记）。已淘汰文档只读（patch/update/set_status/update_meta 均拒绝），编辑 stale 文档会自动清除标记。",
+    args: {
+      id: tool.schema.string().describe("文档 id"),
+      action: tool.schema.string().describe("stale / retired / restore"),
+      force: tool.schema.boolean().optional().describe("强制跳过候选/冷静期校验（需配 reason）"),
+      reason: tool.schema.string().optional().describe("原因（force 时必填，写入 git 记录）"),
+    },
+    async execute(args) {
+      const cfg = loadCfg()
+      if (!cfg) throw new Error(`文枢配置缺失：请创建 ${CFG_PATH}（baseUrl + apiToken）后重启 opencode`)
+      return fmt(await callApi(cfg, "/api/admin/retire", "POST", args))
+    },
+  }),
+
+  wenshu_pending: tool({
+    id: "wenshu_pending",
+    description: "文枢：列出当前所有待办（待执行 SQL / 待实现接口）。",
+    args: {},
+    async execute() {
+      const cfg = loadCfg()
+      if (!cfg) throw new Error(`文枢配置缺失：请创建 ${CFG_PATH}（baseUrl + apiToken）后重启 opencode`)
+      return fmt(await callApi(cfg, "/api/admin/pending"))
+    },
+  }),
+}
+
+// ---- v1 宿主入口：可调用函数返回 v1 hooks ----
+
+const v1Plugin: Plugin = async ({ client }) => {
   const cfg = loadCfg()
   client?.app
     ?.log?.({
@@ -69,198 +315,72 @@ export const WenShuPlugin: Plugin = async ({ client }) => {
     })
     .catch(() => {})
 
-  const requireCfg = (): Cfg => {
-    if (!cfg) throw new Error(`文枢配置缺失：请创建 ${CFG_PATH}（baseUrl + apiToken）后重启 opencode`)
-    return cfg
-  }
-
   return {
     "tool.execute.before": async (input, output) => {
       const args = (output?.args ?? {}) as Record<string, unknown>
-      if (WRITE_TOOLS.has(input.tool)) {
-        const target = String(args.filePath ?? args.path ?? args.file ?? "")
-        if (target && isDocsPath(target)) throw new Error(guardMessageWrite)
-      }
-      if (input.tool === "bash") {
-        const cmd = String(args.command ?? "")
-        if (cmd && isDocsPath(cmd)) {
-          const trimmed = cmd.trim()
-          if (!READONLY_BASH.test(trimmed) || WRITE_BASH.test(cmd)) throw new Error(guardMessageBash)
-        }
-      }
+      guardCore(input.tool, args)
     },
     tool: {
-      wenshu_context: tool({
-        description:
-          "文枢：读取全局文档库结构（项目→主题→文档，含状态/版本/日期与待办）。生成或更新文档前先调用，用于确定 project/topic 命名与关联 id。可用 project/topic/query 过滤。返回的 url 字段是站点路径（站点根 http://192.168.0.71:8903）。",
-        args: {
-          project: tool.schema.string().optional().describe("按项目过滤，如 xingtai-smart-store-api"),
-          topic: tool.schema.string().optional().describe("按主题过滤，如 订餐支付"),
-          query: tool.schema.string().optional().describe("关键词过滤（标题/主题/摘要/正文片段）"),
-        },
-        async execute(args) {
-          const cfg = requireCfg()
-          const qs = new URLSearchParams()
-          if (args.project) qs.set("project", args.project)
-          if (args.topic) qs.set("topic", args.topic)
-          if (args.query) qs.set("query", args.query)
-          const q = qs.toString()
-          return fmt(await callApi(cfg, "/api/admin/context" + (q ? `?${q}` : "")))
-        },
-      }),
-
-      wenshu_read: tool({
-        description: "文枢：读取单篇文档（元数据 + 正文）。id 例如 xingtai-smart-store-api/餐厅/sql/迁移-20260912-订餐支付唯一键。",
-        args: {
-          id: tool.schema.string().describe("文档 id（文档库相对路径去掉扩展名）"),
-        },
-        async execute(args) {
-          const cfg = requireCfg()
-          return fmt(await callApi(cfg, `/api/admin/doc?id=${encodeURIComponent(args.id)}`))
-        },
-      }),
-
-      wenshu_create: tool({
-        description:
-          "文枢：新建文档。sql 类型自动命名 迁移-YYYYMMDD-<topic>.sql 并写入 -- @meta（可用 filename 覆盖文件名）；api/其他类型写入 <title>.md 的 frontmatter。写库后服务自动重建站点并 git 提交。related 必须引用已存在的文档 id（先用 wenshu_context 查询）。",
-        args: {
-          project: tool.schema.string().describe("项目名，如 xingtai-smart-store-api"),
-          topic: tool.schema.string().describe("主题（功能主题，如 订餐支付）"),
-          type: tool.schema
-            .enum(["sql", "api", "adr", "analysis", "scheme", "report", "other"])
-            .describe("文档类型"),
-          title: tool.schema.string().describe("标题（sql 类型用于命名提示，api 类型即文件名）"),
-          content: tool.schema.string().describe("正文：sql 为原始 SQL 脚本；其他为 Markdown 正文（不含 frontmatter）"),
-          domain: tool.schema.string().optional().describe("领域/子目录，如 餐厅（可省略）"),
-          status: tool.schema.string().optional().describe("初始状态：sql[pending|executed] api[pending|implemented] 等"),
-          related: tool.schema.array(tool.schema.string()).optional().describe("关联文档 id 数组"),
-          summary: tool.schema.string().optional().describe("一句话摘要"),
-          date: tool.schema.string().optional().describe("日期 YYYY-MM-DD（默认今天）"),
-          version: tool.schema.number().optional().describe("版本号（一般 API 文档用）"),
-          filename: tool.schema.string().optional().describe("显式文件名（sql 类型专用，如 迁移-20260914-订餐支付.sql）"),
-        },
-        async execute(args) {
-          const cfg = requireCfg()
-          return fmt(await callApi(cfg, "/api/admin/create", "POST", args))
-        },
-      }),
-
-      wenshu_new_version: tool({
-        description:
-          "文枢：为已有文档出新版本（严格门槛，服务端强制）。API：必须当前 status=implemented，且显式传 major_change=true 并填写 changes（仅新增/删除接口、契约实质变化、大范围改写）。SQL：必须当前 status=executed（未执行的 SQL 请用 wenshu_update 原地改）。未实现/未执行的文档调用会被服务端拒绝——改未完成内容用 wenshu_update，改措辞/示例用 wenshu_patch。API 升版生成 vN+1（全量快照）并自动归档旧版；SQL 追加新迁移文件并默认关联旧脚本。changes 一条一个改动点（前端据此知道要改哪些接口）；服务端自动注入「本版变更」（SQL 为 -- 注释），content 里不要重复写。",
-        args: {
-          id: tool.schema.string().describe("被版本化的文档 id"),
-          changes: tool.schema
-            .array(tool.schema.string())
-            .describe("本版变更清单（必填，一条一个改动点，如「4.3 全部人员记录：出参新增 6 个字段」）"),
-          content: tool.schema.string().describe("新版本完整正文（Markdown 或 SQL），不含「本版变更」小节"),
-          major_change: tool.schema
-            .boolean()
-            .optional()
-            .describe("API 升版闸门：仅当当前版本已实现且改动较大时传 true（服务端强制校验）"),
-          title: tool.schema.string().optional().describe("新版本标题（默认原标题+vN）"),
-          status: tool.schema.string().optional().describe("新版本初始状态，默认 pending"),
-          date: tool.schema.string().optional().describe("日期 YYYY-MM-DD（默认今天）"),
-          version: tool.schema.number().optional().describe("显式版本号（默认旧版本+1）"),
-          related: tool.schema.array(tool.schema.string()).optional().describe("覆盖新版本的关联 id 数组"),
-          filename: tool.schema.string().optional().describe("SQL 专用：显式文件名"),
-        },
-        async execute(args) {
-          const cfg = requireCfg()
-          const changes = (Array.isArray(args.changes) ? args.changes : [])
-            .map((c) => String(c).trim())
-            .filter(Boolean)
-          if (!changes.length) {
-            throw new Error("changes 必填：请提供本版变更清单（一条一个改动点，如「4.3 出参新增 6 个字段」）")
-          }
-          return fmt(await callApi(cfg, "/api/admin/version", "POST", { ...args, changes }))
-        },
-      }),
-
-      wenshu_update: tool({
-        description:
-          "文枢：原地完整更新未完成的文档（不升版、不换 ID、不改状态）。仅 pending/draft（未实现接口、未执行 SQL、未定稿方案）可用；保留原版本号与关联，写入 revision+1 与 updated（页面显示「最近修订」）。pending SQL 直接改原脚本、不新建迁移。整篇重写优先用本工具；零散小改动用 wenshu_patch；已实现/已执行的大改动才用 wenshu_new_version。content 传不含 frontmatter/-- @meta 的完整正文（可从 wenshu_read 获取）；changes 可选（提供则替换「本版变更」小节）；expected_revision 可选做乐观锁。",
-        args: {
-          id: tool.schema.string().describe("文档 id"),
-          content: tool.schema.string().describe("新的完整正文（Markdown 或 SQL，不含 frontmatter/-- @meta）"),
-          reason: tool.schema.string().describe("更新原因（必填，一句话；写入 git commit）"),
-          changes: tool.schema
-            .array(tool.schema.string())
-            .optional()
-            .describe("本版变更清单（可选；提供则替换正文中的「本版变更」小节，一条一个改动点）"),
-          expected_revision: tool.schema
-            .number()
-            .optional()
-            .describe("乐观锁：传入当前 revision（wenshu_read 可见），不匹配则拒绝"),
-        },
-        async execute(args) {
-          const cfg = requireCfg()
-          return fmt(await callApi(cfg, "/api/admin/update", "POST", args))
-        },
-      }),
-
-      wenshu_set_status: tool({
-        description:
-          "文枢：翻转文档状态。SQL: pending→executed；接口: pending→implemented；ADR: accepted；过程文档: draft→final；均可 →archived。注意：必须先获得用户确认再调用（尤其 executed/implemented）。",
-        args: {
-          id: tool.schema.string().describe("文档 id"),
-          status: tool.schema.string().describe("目标状态：executed / implemented / accepted / final / archived / pending / draft"),
-        },
-        async execute(args) {
-          const cfg = requireCfg()
-          return fmt(await callApi(cfg, "/api/admin/status", "POST", args))
-        },
-      }),
-
-      wenshu_update_meta: tool({
-        description:
-          "文枢：更新文档元数据（topic/domain/summary/related/title）或补写「本版变更」（changes：md 文档，服务端插入/替换正文中的该小节）。related 必须引用已存在的 id；空数组可清空关联。",
-        args: {
-          id: tool.schema.string().describe("文档 id"),
-          topic: tool.schema.string().optional().describe("新主题"),
-          domain: tool.schema.string().optional().describe("新领域"),
-          summary: tool.schema.string().optional().describe("新摘要"),
-          title: tool.schema.string().optional().describe("新标题"),
-          related: tool.schema.array(tool.schema.string()).optional().describe("新的关联 id 数组"),
-          changes: tool.schema
-            .array(tool.schema.string())
-            .optional()
-            .describe("本版变更清单（md 文档补写/替换「本版变更」小节；一条一个改动点）"),
-        },
-        async execute(args) {
-          const cfg = requireCfg()
-          return fmt(await callApi(cfg, "/api/admin/meta", "POST", args))
-        },
-      }),
-
-      wenshu_patch: tool({
-        description:
-          "文枢：给当前版文档打补丁（不改版本号、不出新版）。**改文档默认用这个**：措辞/描述/示例/口径等小改动都用补丁（最多 5 条、合计 ≤800 字）；bulk:true 放宽到 40 条、单条 ≤20000 字、合计 ≤20000 字（批量维护、大改但当前版未实现时使用，reason 写明用途）。edits 为精确替换数组：每条 find 必须在正文中恰好命中 1 次；reason 必填并写入 git 记录。仅当「当前版本已实现且改动量较大」才改用 wenshu_new_version（需 major_change=true）；未完成的文档整篇重写用 wenshu_update。未执行（pending）的 SQL 可打补丁，已执行 SQL（请出新迁移）、已被新版替代的历史版本、归档文档会被拒绝。",
-        args: {
-          id: tool.schema.string().describe("文档 id"),
-          reason: tool.schema.string().describe("补丁原因（必填，一句话；写入 git commit）"),
-          edits: tool.schema
-            .array(tool.schema.object({ find: tool.schema.string(), replace: tool.schema.string() }))
-            .describe("精确替换列表：find 必须在正文中恰好命中 1 次，replace 可为空串（删除）"),
-          bulk: tool.schema
-            .boolean()
-            .optional()
-            .describe("维护模式：仅用于规范回补等批量修改（放宽至 40 条/20000 字），日常微调不要使用"),
-        },
-        async execute(args) {
-          const cfg = requireCfg()
-          return fmt(await callApi(cfg, "/api/admin/patch", "POST", args))
-        },
-      }),
-
-      wenshu_pending: tool({
-        description: "文枢：列出当前所有待办（待执行 SQL / 待实现接口）。",
-        args: {},
-        async execute() {
-          const cfg = requireCfg()
-          return fmt(await callApi(cfg, "/api/admin/pending"))
-        },
-      }),
+      wenshu_context: tools.wenshu_context,
+      wenshu_read: tools.wenshu_read,
+      wenshu_create: tools.wenshu_create,
+      wenshu_new_version: tools.wenshu_new_version,
+      wenshu_update: tools.wenshu_update,
+      wenshu_set_status: tools.wenshu_set_status,
+      wenshu_update_meta: tools.wenshu_update_meta,
+      wenshu_patch: tools.wenshu_patch,
+      wenshu_review: tools.wenshu_review,
+      wenshu_retire: tools.wenshu_retire,
+      wenshu_pending: tools.wenshu_pending,
     },
   }
 }
+
+// ---- v2 宿主入口：Plugin.define 兼容的 { id, setup(ctx) }（附着在可调用函数上） ----
+
+type V2ToolEditor = { add(t: Record<string, unknown>): void }
+type V2HookInput = { tool: string; input: unknown }
+type V2Ctx = {
+  tool?: {
+    transform(cb: (editor: V2ToolEditor) => void): Promise<unknown>
+    hook(name: string, cb: (input: V2HookInput) => Promise<void> | void): Promise<unknown>
+  }
+  location?: { directory?: string }
+  options?: unknown
+}
+
+const v2Setup = async (ctx: V2Ctx) => {
+  // 注意：局部变量不能叫 tool，否则遮蔽顶部从 @opencode-ai/plugin 导入的 tool 助手
+  const domain = ctx?.tool
+  if (domain && typeof domain.transform === "function") {
+    await domain.transform((editor) => {
+      for (const [name, def] of Object.entries(tools)) {
+        // 宿主已验证可注册的字段保持原样（含 args/description/id/name）；仅把 execute 结果改成 v2 要求的 { content }
+        editor.add({
+          ...def,
+          id: name,
+          name,
+          async execute(input: unknown, call: unknown) {
+            const result = await (def as { execute(a: unknown, c: unknown): Promise<unknown> }).execute(input, call)
+            return { content: typeof result === "string" ? result : ((result as { output?: string })?.output ?? "") }
+          },
+        })
+      }
+    })
+  }
+  if (domain && typeof domain.hook === "function") {
+    await domain.hook("execute.before", (draft) => {
+      const n = (draft as { tool?: string })?.tool
+      const args = ((draft as { input?: unknown })?.input ?? {}) as Record<string, unknown>
+      if (n) guardCore(n, args)
+    })
+  }
+  return () => {}
+}
+
+// 复合导出：v2 读 .id/.setup，v1 直接调用函数体
+const WenShuPlugin = { id: "wenshu", server: v1Plugin, setup: v2Setup }
+
+export { WenShuPlugin }
+export { WenShuPlugin as Plugin }
+export default WenShuPlugin

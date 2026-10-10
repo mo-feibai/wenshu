@@ -30,7 +30,7 @@ for (const e of entries) {
   topicSets.get(e.data.project)!.add(e.data.topic);
 }
 
-const recent = sorted.slice(0, 9);
+const recent = sorted.filter((e) => !e.data.retired_at).slice(0, 9);
 ---
 <Base>
   <section class="hero hero-home">

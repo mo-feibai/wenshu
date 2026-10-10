@@ -282,6 +282,199 @@ def save_entry_fields(entry, fields: dict):
     entry["meta"].update(fields)
 
 
+def remove_entry_fields(entry, keys):
+    if entry["kind"] == "md":
+        meta, rest = parse_md(entry["text"])
+        for k in keys:
+            meta.pop(k, None)
+        text = render_md(meta, rest)
+    else:
+        meta, rest = parse_sql_meta(entry["text"])
+        for k in keys:
+            meta.pop(k, None)
+        text = render_sql_meta(meta, rest)
+    entry["path"].write_text(text, encoding="utf-8")
+    entry["text"] = text
+    for k in keys:
+        entry["meta"].pop(k, None)
+
+
+# ---------------- 生命周期淘汰 ----------------
+
+RETENTION_PATH = BASE / "retention.json"
+RETENTION_DEFAULTS = {
+    "T_A1": 90, "T_A2": 90, "T_B": 60, "T_C": 90, "T_D": 7, "T_E": 180,
+    "GRACE_STALE_RETIRED": 7, "GRACE_RETIRED_DELETE": 30,
+}
+
+
+def load_retention():
+    try:
+        data = json.loads(RETENTION_PATH.read_text(encoding="utf-8"))
+        out = dict(RETENTION_DEFAULTS)
+        for k in out:
+            if isinstance(data.get(k), int) and data[k] > 0:
+                out[k] = data[k]
+        return out
+    except Exception:
+        return dict(RETENTION_DEFAULTS)
+
+
+def last_active(entry):
+    """文档最后活跃日：git 最后提交日（兜底 frontmatter.updated）。"""
+    code, out, _ = run_git(["log", "-1", "--format=%cs", "--", entry["rel"]])
+    if code == 0 and out:
+        try:
+            return datetime.date.fromisoformat(out)
+        except ValueError:
+            pass
+    for k in ("updated", "date"):
+        v = entry["meta"].get(k)
+        if v:
+            try:
+                return datetime.date.fromisoformat(str(v)[:10])
+            except ValueError:
+                pass
+    return datetime.date.today()
+
+
+def _inbound_refs(entries, entry):
+    n = 0
+    for other in entries:
+        if other is entry:
+            continue
+        m = other["meta"]
+        if entry["id"] in [str(x) for x in (m.get("related") or [])]:
+            n += 1
+        if m.get("supersedes") == entry["id"]:
+            n += 1
+    return n
+
+
+def _has_active_share(entry):
+    t = now_ts()
+    target = doc_url(entry["id"])
+    for item in shares.values():
+        if item.get("expires", 0) > t and item.get("path") == target:
+            return True
+    return False
+
+
+def _review_item(e, cls, stage, today):
+    m = e["meta"]
+    idle = (today - last_active(e)).days
+    action = {"candidate": "标记过期", "retire_pending": "淘汰隐藏",
+              "delete_pending": "建议删除", "review_only": "人工审阅"}.get(stage, "")
+    return {
+        "id": e["id"], "title": m.get("title", ""), "project": m.get("project", ""),
+        "topic": m.get("topic", ""), "type": m.get("type", ""), "status": m.get("status", ""),
+        "cls": cls, "stage": stage, "idle": idle, "last_active": last_active(e).isoformat(),
+        "stale_at": m.get("stale_at"), "retired_at": m.get("retired_at"),
+        "action": action, "url": doc_url(e["id"]),
+    }
+
+
+def review_entries(entries, overrides=None):
+    """扫描全库，返回淘汰候选清单（只读）。"""
+    th = load_retention()
+    if overrides:
+        for k in th:
+            if isinstance(overrides.get(k), int) and overrides[k] > 0:
+                th[k] = overrides[k]
+    today = datetime.date.today()
+    out = []
+    for e in entries:
+        m = e["meta"]
+        status = str(m.get("status") or "")
+        dtype = str(m.get("type") or "other")
+        stale_at = m.get("stale_at")
+        retired_at = m.get("retired_at")
+        if dtype == "sql" and status == "executed":
+            continue
+        if status in ("implemented", "final", "accepted") and not str(m.get("superseded_by") or "").strip():
+            idle = (today - last_active(e)).days
+            if idle >= th["T_E"]:
+                out.append(_review_item(e, "E", "review_only", today))
+            continue
+        if _inbound_refs(entries, e) > 0:
+            continue
+        if m.get("attachment") or m.get("attachments"):
+            continue
+        if _has_active_share(e):
+            continue
+        if stale_at or retired_at:
+            stage = "candidate"
+            if stale_at:
+                try:
+                    if (today - datetime.date.fromisoformat(str(stale_at)[:10])).days >= th["GRACE_STALE_RETIRED"]:
+                        stage = "retire_pending"
+                except ValueError:
+                    pass
+            if retired_at:
+                try:
+                    if (today - datetime.date.fromisoformat(str(retired_at)[:10])).days >= th["GRACE_RETIRED_DELETE"]:
+                        stage = "delete_pending"
+                except ValueError:
+                    pass
+            cls = "A1" if str(m.get("superseded_by") or "").strip() else "A2"
+            out.append(_review_item(e, cls, stage, today))
+            continue
+        idle = (today - last_active(e)).days
+        cls = None
+        if status == "archived":
+            cls = "A1" if str(m.get("superseded_by") or "").strip() else "A2"
+            if idle < th["T_A1"]:
+                cls = None
+        elif status in ("pending", "draft"):
+            if idle >= th["T_B"]:
+                cls = "B"
+        elif idle >= th["T_C"]:
+            cls = "C"
+        if cls is None:
+            proj = str(m.get("project", ""))
+            title = str(m.get("title", ""))
+            if (proj == "demo" or any(k in title for k in ("临时", "测试", "示例"))) and idle >= th["T_D"]:
+                cls = "D"
+        if cls:
+            out.append(_review_item(e, cls, "candidate", today))
+    order = {"delete_pending": 0, "retire_pending": 1, "candidate": 2, "review_only": 3}
+    out.sort(key=lambda x: (order.get(x["stage"], 9), -x["idle"]))
+    return out
+
+
+def _auto_clear_stale(entry):
+    """写操作后自动清除 stale_at（编辑即复活）。"""
+    if entry["meta"].get("stale_at"):
+        remove_entry_fields(entry, ["stale_at"])
+
+
+def recent_deletions(days=30):
+    """最近 N 天删除的文档（从 git 历史读），用于看板「最近删除」与一键恢复。"""
+    since = (datetime.date.today() - datetime.timedelta(days=days)).isoformat()
+    code, out, _ = run_git(["log", "--diff-filter=D", "--since=" + since,
+                            "--format=%H|%cs|%s", "--name-only"])
+    if code != 0 or not out:
+        return []
+    commits = []
+    cur = None
+    for line in out.splitlines():
+        if "|" in line:
+            if cur:
+                commits.append(cur)
+            sha, d, msg = line.split("|", 2)
+            cur = {"sha": sha, "date": d[:10], "message": msg, "files": []}
+        elif line.strip() and cur is not None:
+            cur["files"].append(line.strip())
+    if cur:
+        commits.append(cur)
+    res = []
+    for c in commits:
+        for f in c["files"]:
+            if f.endswith((".md", ".sql")):
+                res.append({"file": f, "sha": c["sha"], "date": c["date"], "message": c["message"]})
+    return res
+
+
 CHANGELOG_RE = re.compile(r"^##\s+本版变更\s*$", re.M)
 ITEM_RE = re.compile(r"^(?:[-*+]|\d+\.)\s+")
 
@@ -492,6 +685,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def entry_brief(self, e):
         m = e["meta"]
+        lifecycle = None
+        if m.get("retired_at"):
+            lifecycle = "retired"
+        elif m.get("stale_at"):
+            lifecycle = "stale"
         return {
             "id": e["id"], "title": m.get("title", ""), "project": m.get("project", ""),
             "domain": m.get("domain", ""), "topic": m.get("topic", ""), "type": m.get("type", ""),
@@ -499,12 +697,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             "version": m.get("version"), "url": doc_url(e["id"]),
             "summary": m.get("summary", ""), "related": m.get("related", []),
             "supersedes": m.get("supersedes"), "superseded_by": m.get("superseded_by"),
+            "lifecycle": lifecycle,
         }
 
     def admin_pending(self):
         entries = read_entries()
         items = [self.entry_brief(e) for e in entries if e["meta"].get("status") == "pending"]
-        return self.json_response(200, {"count": len(items), "items": items})
+        stale = [i for i in items if i.get("lifecycle") == "stale"]
+        active = [i for i in items if not i.get("lifecycle")]
+        return self.json_response(200, {"count": len(items), "active": active, "stale": stale})
 
     def admin_context(self, qs):
         entries = read_entries()
@@ -738,6 +939,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             entry = find_entry(entries, doc_id)
             if not entry:
                 raise ApiError(404, "文档不存在: " + doc_id)
+            if str(entry["meta"].get("retired_at") or "").strip():
+                raise ApiError(400, "已淘汰文档只读，请先 restore")
             dtype = str(entry["meta"].get("type", "other"))
             allowed = STATUS_SETS.get(dtype, STATUS_SETS["other"])
             if status not in allowed:
@@ -747,6 +950,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return {"id": entry["id"], "status": status, "unchanged": True,
                         "url": doc_url(entry["id"]), "commit_message": "chore: noop status"}
             save_entry_fields(entry, {"status": status})
+            _auto_clear_stale(entry)
             return {"id": entry["id"], "status": status, "previous": old,
                     "url": doc_url(entry["id"]), "commit_message": f"chore: {entry['id']} {old} -> {status}"}
 
@@ -760,6 +964,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             entry = find_entry(entries, doc_id)
             if not entry:
                 raise ApiError(404, "文档不存在: " + doc_id)
+            if str(entry["meta"].get("retired_at") or "").strip():
+                raise ApiError(400, "已淘汰文档只读，请先 restore")
             fields = {}
             for k in ("topic", "domain", "summary", "title"):
                 if payload.get(k) is not None:
@@ -797,6 +1003,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             updated = dict(fields)
             if changes is not None:
                 updated["changes"] = changes
+            _auto_clear_stale(entry)
             return {"id": entry["id"], "updated": updated, "url": doc_url(entry["id"]),
                     "commit_message": f"chore: 更新元数据 {entry['id']}"}
 
@@ -842,6 +1049,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             status = str(meta.get("status") or "").strip()
             if status == "archived":
                 raise ApiError(400, "归档文档不可修改，请出新版")
+            if str(meta.get("retired_at") or "").strip():
+                raise ApiError(400, "已淘汰文档只读，请先 restore")
             if entry["kind"] == "sql":
                 if status != "pending":
                     raise ApiError(400, "仅未执行（pending）的 SQL 可打补丁；已执行脚本不可就地修改，请出新迁移")
@@ -865,6 +1074,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             entry["path"].write_text(text, encoding="utf-8")
             entry["text"] = text
             entry["meta"].update({"revision": revision, "updated": updated})
+            _auto_clear_stale(entry)
             return {"id": entry["id"], "patches": len(clean), "reason": reason,
                     "revision": revision, "updated": updated, "url": doc_url(entry["id"]),
                     "commit_message": f"chore: 补丁 {entry['id']} — {reason}（不升版）"}
@@ -895,6 +1105,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 raise ApiError(400, "归档文档不可修改，请出新版")
             if status not in ("pending", "draft"):
                 raise ApiError(400, f"仅未实现/未定稿（pending/draft）的文档可原地完整更新；当前状态「{status or '未设置'}」，小改动请用 wenshu_patch，已实现且改动较大请升版")
+            if str(meta.get("retired_at") or "").strip():
+                raise ApiError(400, "已淘汰文档只读，请先 restore")
             exp = payload.get("expected_revision")
             cur_rev = int(meta.get("revision") or 0)
             if exp is not None and int(exp) != cur_rev:
@@ -920,6 +1132,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             entry["path"].write_text(text, encoding="utf-8")
             entry["text"] = text
             entry["meta"].update({"revision": revision, "updated": updated})
+            _auto_clear_stale(entry)
             return {"id": entry["id"], "mode": "updated", "revision": revision, "updated": updated,
                     "url": doc_url(entry["id"]), "status": status,
                     "commit_message": f"chore: 原地更新 {entry['id']} — {reason}（不升版）"}
@@ -934,8 +1147,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             entry = find_entry(entries, doc_id)
             if not entry:
                 raise ApiError(404, "文档不存在: " + doc_id)
+            meta = entry["meta"]
+            if str(meta.get("superseded_by") or "").strip():
+                raise ApiError(400, "该文档已被新版替代（历史版本），请确认后删除")
+            # 使指向该文档的分享立即失效
+            target = doc_url(entry["id"])
+            dead = [k for k, v in shares.items() if v.get("path") == target]
+            for k in dead:
+                del shares[k]
+            if dead:
+                save_shares()
             rel = entry["path"].relative_to(DOCS).as_posix()
             entry["path"].unlink()
+            # 清引用
             for other in entries:
                 if other is entry:
                     continue
@@ -950,8 +1174,111 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     changed = {"superseded_by": ""}
                 if changed is not None:
                     save_entry_fields(other, changed)
+            # 清 file_keys.json 失效条目
+            keys_path = BASE / "scripts" / "file_keys.json"
+            if keys_path.exists():
+                try:
+                    keys = json.loads(keys_path.read_text(encoding="utf-8"))
+                    if rel in keys:
+                        keys.pop(rel, None)
+                        keys_path.write_text(json.dumps(keys, ensure_ascii=False, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
+            # 删空目录
+            d = entry["path"].parent
+            while d != DOCS and d.exists():
+                try:
+                    if not any(d.iterdir()):
+                        d.rmdir()
+                        d = d.parent
+                    else:
+                        break
+                except OSError:
+                    break
             return {"id": entry["id"], "deleted": rel, "url": "/",
                     "commit_message": f"chore: 删除文档 {entry['id']}"}
+
+        return self.admin_write(mutate)
+
+    def admin_review(self, qs):
+        entries = read_entries()
+        overrides = None
+        ov = qs.get("overrides", [""])[0] if qs.get("overrides") else ""
+        if ov:
+            try:
+                overrides = json.loads(ov)
+            except Exception:
+                return self.json_response(400, {"error": "overrides 必须是 JSON 对象"})
+        cands = review_entries(entries, overrides)
+        return self.json_response(200, {
+            "generated_at": datetime.date.today().isoformat(),
+            "thresholds": load_retention(),
+            "count": len(cands),
+            "candidates": cands,
+            "recent_deletions": recent_deletions(),
+        })
+
+    def admin_retire(self, payload):
+        def mutate(entries):
+            doc_id = str(payload.get("id", "")).strip()
+            action = str(payload.get("action", "")).strip()
+            force = bool(payload.get("force"))
+            reason = str(payload.get("reason", "")).strip()
+            if not doc_id:
+                raise ApiError(400, "id 必填")
+            if action not in ("stale", "retired", "restore"):
+                raise ApiError(400, "action 必须是 stale / retired / restore")
+            entry = find_entry(entries, doc_id)
+            if not entry:
+                raise ApiError(404, "文档不存在: " + doc_id)
+            meta = entry["meta"]
+            status = str(meta.get("status") or "").strip()
+            if status == "archived":
+                raise ApiError(400, "归档文档不可修改，请出新版")
+            today = datetime.date.today().isoformat()
+            if action == "restore":
+                if not meta.get("stale_at") and not meta.get("retired_at"):
+                    return {"id": entry["id"], "action": "restore", "message": "无需恢复（无淘汰标记）",
+                            "url": doc_url(entry["id"]), "commit_message": "chore: noop retire"}
+                remove_entry_fields(entry, ["stale_at", "retired_at"])
+                return {"id": entry["id"], "action": "restore", "message": "已恢复（清除淘汰标记）",
+                        "url": doc_url(entry["id"]), "commit_message": f"chore: 淘汰 {entry['id']} — restore"}
+            if action == "stale":
+                if meta.get("stale_at"):
+                    return {"id": entry["id"], "action": "stale", "message": "已标记过期",
+                            "stale_at": meta["stale_at"], "url": doc_url(entry["id"]),
+                            "commit_message": "chore: noop retire"}
+                if not force:
+                    cands = review_entries(entries)
+                    if not any(c["id"] == entry["id"] for c in cands):
+                        raise ApiError(400, "该文档不在候选清单中（需 force=true + reason 才能标记）")
+                if not reason:
+                    raise ApiError(400, "force 标记需要 reason")
+                save_entry_fields(entry, {"stale_at": today})
+                return {"id": entry["id"], "action": "stale", "stale_at": today,
+                        "message": f"已标记过期，{load_retention()['GRACE_STALE_RETIRED']} 天后可淘汰",
+                        "url": doc_url(entry["id"]), "commit_message": f"chore: 淘汰 {entry['id']} — stale（{reason}）"}
+            # action == "retired"
+            if meta.get("retired_at"):
+                return {"id": entry["id"], "action": "retired", "message": "已淘汰",
+                        "retired_at": meta["retired_at"], "url": doc_url(entry["id"]),
+                        "commit_message": "chore: noop retire"}
+            stale_at = meta.get("stale_at")
+            if not stale_at:
+                raise ApiError(400, "需先标记过期（stale）才能淘汰")
+            th = load_retention()
+            try:
+                d0 = datetime.date.fromisoformat(str(stale_at)[:10])
+                if (datetime.date.today() - d0).days < th["GRACE_STALE_RETIRED"] and not force:
+                    raise ApiError(400, f"冷静期未满（需 {th['GRACE_STALE_RETIRED']} 天，或 force=true + reason）")
+            except ValueError:
+                pass
+            if not reason:
+                raise ApiError(400, "force 淘汰需要 reason")
+            save_entry_fields(entry, {"retired_at": today})
+            return {"id": entry["id"], "action": "retired", "retired_at": today,
+                    "message": f"已淘汰隐藏，{th['GRACE_RETIRED_DELETE']} 天后可删除",
+                    "url": doc_url(entry["id"]), "commit_message": f"chore: 淘汰 {entry['id']} — retired（{reason}）"}
 
         return self.admin_write(mutate)
 
@@ -978,7 +1305,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self.admin_context(qs)
             if path == "/api/admin/doc":
                 return self.admin_doc(qs)
+            if path == "/api/admin/review":
+                return self.admin_review(qs)
             return self.json_response(404, {"error": "unknown admin endpoint"})
+        if path == "/api/review":
+            if not self.is_authed():
+                return self.json_response(401, {"error": "未登录"})
+            return self.admin_review(urllib.parse.parse_qs(parsed.query))
         if self.is_authed() or path in PUBLIC_FILES or any(path.startswith(p) for p in PUBLIC_PREFIXES):
             return super().do_GET()
         grant = self.share_grant()
@@ -1061,6 +1394,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self.admin_patch(payload)
             if parsed.path == "/api/admin/update":
                 return self.admin_update(payload)
+            if parsed.path == "/api/admin/retire":
+                return self.admin_retire(payload)
             if parsed.path == "/api/admin/delete":
                 return self.admin_delete(payload)
             return self.json_response(404, {"error": "unknown admin endpoint"})

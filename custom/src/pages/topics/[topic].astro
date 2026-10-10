@@ -13,7 +13,7 @@ export async function getStaticPaths() {
     params: { topic },
     props: {
       list: entries
-        .filter((e) => e.data.topic === topic)
+        .filter((e) => e.data.topic === topic && !e.data.retired_at)
         .sort(
           (a, b) =>
             b.data.date.getTime() - a.data.date.getTime() ||
@@ -24,9 +24,9 @@ export async function getStaticPaths() {
 }
 
 const { list } = Astro.props;
-const topic = list[0].data.topic;
-const project = list[0].data.project;
-const domain = list[0].data.domain;
+const topic = list[0]?.data.topic ?? Astro.params.topic;
+const project = list[0]?.data.project ?? '';
+const domain = list[0]?.data.domain ?? '';
 const pendingCount = list.filter((e: any) => e.data.status === 'pending').length;
 const assets = (assetsRaw as any[]).filter((a) => a.project === project && a.topic === topic);
 const versionChains = [...versionFamilies(list).families.values()].filter((f) => f.length > 1);
@@ -41,6 +41,7 @@ const versionChains = [...versionFamilies(list).families.values()].filter((f) =>
       {list.length} 篇文档
       {pendingCount > 0 ? ` · ${pendingCount} 项待办` : ' · 无待办'}
     </p>
+    {list.length === 0 && <p style="color:var(--muted);font-size:13px">该主题暂无可见文档（可能已全部淘汰）。</p>}
   </section>
 
   {versionChains.length > 0 && (

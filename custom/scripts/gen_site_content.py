@@ -166,6 +166,10 @@ def main():
                 fm["revision"] = int(meta["revision"])
             if meta.get("updated"):
                 fm["updated"] = meta["updated"]
+            if meta.get("stale_at"):
+                fm["stale_at"] = meta["stale_at"]
+            if meta.get("retired_at"):
+                fm["retired_at"] = meta["retired_at"]
             if related:
                 fm["related"] = related
             if att:

@@ -77,6 +77,7 @@ const totalPending = entries.filter((e) => e.data.status === 'pending').length;
           <a class={`nav-item ${path.startsWith('/pending') ? 'active' : ''}`} href="/pending/">
             待办看板 <span class="badge-count warning">{totalPending}</span>
           </a>
+          <a class={`nav-item ${path.startsWith('/review') ? 'active' : ''}`} href="/review/">淘汰审阅</a>
           <a class="nav-item" href="/swagger/">接口交互</a>
         </nav>
         {projects.map((p) => {

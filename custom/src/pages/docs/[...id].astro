@@ -54,7 +54,7 @@ const flipCopy = `请将文枢文档「${entry.data.title}」的状态从 pendin
   </div>
 
   <div class="doc-grid">
-    <article data-pagefind-body>
+    <article data-pagefind-body{entry.data.retired_at ? ' data-pagefind-ignore' : ''}>
       <span data-pagefind-meta="topic" hidden>{entry.data.topic}</span>
       <span data-pagefind-meta="status" hidden>{entry.data.status}</span>
       <span data-pagefind-meta="type" hidden>{entry.data.type}</span>
@@ -62,6 +62,8 @@ const flipCopy = `请将文枢文档「${entry.data.title}」的状态从 pendin
         <div class="row" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <TypeBadge type={entry.data.type} version={entry.data.version} />
           <StatusBadge status={entry.data.status} />
+          {entry.data.stale_at && <span class="badge stale">已过期</span>}
+          {entry.data.retired_at && <span class="badge retired">已淘汰</span>}
           <span style="color:var(--faint);font-size:12px" class="mono">{fmtDate(entry.data.date)}</span>
         </div>
         <h1>{entry.data.title}</h1>

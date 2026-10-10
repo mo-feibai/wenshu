@@ -15,6 +15,8 @@ export const collections = {
       date: z.coerce.date(),
       revision: z.number().optional(),
       updated: z.coerce.date().optional(),
+      stale_at: z.coerce.date().optional(),
+      retired_at: z.coerce.date().optional(),
       summary: z.string().optional(),
       related: z.array(z.string()).default([]),
       supersedes: z.string().optional(),
