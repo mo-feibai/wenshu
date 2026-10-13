@@ -24,9 +24,10 @@ export async function getStaticPaths() {
 }
 
 const { list } = Astro.props;
-const topic = list[0]?.data.topic ?? Astro.params.topic;
+const topic = list[0]?.data.topic ?? (Astro.params.topic ?? '');
 const project = list[0]?.data.project ?? '';
 const domain = list[0]?.data.domain ?? '';
+const topicProjects = [...new Set(list.map((e: any) => e.data.project).filter(Boolean))];
 const pendingCount = list.filter((e: any) => e.data.status === 'pending').length;
 const assets = (assetsRaw as any[]).filter((a) => a.project === project && a.topic === topic);
 const versionChains = [...versionFamilies(list).families.values()].filter((f) => f.length > 1);
@@ -42,7 +43,128 @@ const versionChains = [...versionFamilies(list).families.values()].filter((f) =>
       {pendingCount > 0 ? ` · ${pendingCount} 项待办` : ' · 无待办'}
     </p>
     {list.length === 0 && <p style="color:var(--muted);font-size:13px">该主题暂无可见文档（可能已全部淘汰）。</p>}
+    <div class="module-share">
+      <button class="copy-btn" id="mshare-open">分享本主题</button>
+      {topicProjects.length > 1 && (
+        <span class="mshare-note-inline">本主题名跨 {topicProjects.length} 个项目：{topicProjects.join('、')}</span>
+      )}
+    </div>
   </section>
+
+  <div class="share-modal" id="mshare-modal" hidden>
+    <div class="share-card">
+      <h3>分享本主题（模块）</h3>
+      <p class="hint">访客将看到本主题下全部<b>当前版</b>文档，并可在模块内全文搜索；历史版本、已归档与已淘汰文档不开放。链接无需密码，到期自动失效。</p>
+      <div class="mshare-list" id="mshare-list">加载中…</div>
+      <label class="field">到期时间
+        <input type="datetime-local" id="mshare-expiry" />
+      </label>
+      <div class="share-quick" id="mshare-quick">
+        <button type="button" class="quick-btn" data-days="1">1 天</button>
+        <button type="button" class="quick-btn" data-days="7" data-active="1">7 天</button>
+        <button type="button" class="quick-btn" data-days="30">30 天</button>
+        <button type="button" class="quick-btn" data-days="3650">永久</button>
+      </div>
+      <div class="actions">
+        <button class="copy-btn" id="mshare-create">创建链接</button>
+        <button class="copy-btn" id="mshare-cancel">取消</button>
+      </div>
+      <div class="share-result" id="mshare-result" hidden>
+        <input type="text" id="mshare-url" readonly />
+        <button class="copy-btn" id="mshare-copy">复制</button>
+      </div>
+      <div class="share-error" id="mshare-error" hidden></div>
+    </div>
+  </div>
+
+  <script is:inline define:vars={{ topicName: topic }}>
+    (() => {
+      const openBtn = document.getElementById('mshare-open');
+      const modal = document.getElementById('mshare-modal');
+      if (!openBtn || !modal) return;
+      const listEl = document.getElementById('mshare-list');
+      const expiry = document.getElementById('mshare-expiry');
+      const quick = document.getElementById('mshare-quick');
+      const createBtn = document.getElementById('mshare-create');
+      const cancelBtn = document.getElementById('mshare-cancel');
+      const resultEl = document.getElementById('mshare-result');
+      const urlEl = document.getElementById('mshare-url');
+      const copyBtn = document.getElementById('mshare-copy');
+      const errEl = document.getElementById('mshare-error');
+      const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+      const setDays = (d) => {
+        const dt = new Date(Date.now() + d * 86400000);
+        dt.setSeconds(0, 0);
+        expiry.value = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}T${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}`;
+        quick.querySelectorAll('.quick-btn').forEach((b) => b.removeAttribute('data-active'));
+        const hit = quick.querySelector(`[data-days="${d}"]`);
+        if (hit) hit.setAttribute('data-active', '1');
+      };
+      setDays(7);
+      quick.querySelectorAll('.quick-btn').forEach((b) =>
+        b.addEventListener('click', () => setDays(Number(b.dataset.days))));
+      expiry.addEventListener('change', () =>
+        quick.querySelectorAll('.quick-btn').forEach((b) => b.removeAttribute('data-active')));
+
+      let loaded = false;
+      openBtn.addEventListener('click', async () => {
+        modal.hidden = false;
+        if (loaded) return;
+        try {
+          const r = await fetch('/api/module-docs?topic=' + encodeURIComponent(topicName));
+          if (r.status === 401) { modal.hidden = true; location.href = '/login?next=' + encodeURIComponent(location.pathname); return; }
+          const d = await r.json();
+          loaded = true;
+          if (!d.docs.length) {
+            listEl.innerHTML = '<span class="muted">本主题下没有可分享的当前版文档。</span>';
+            createBtn.disabled = true;
+            return;
+          }
+          listEl.innerHTML =
+            `<div class="muted">将开放 ${d.count} 篇当前版文档（含未实现的 pending 文档）：</div>` +
+            d.docs.map((x) => `<div class="mshare-item"><span>${esc(x.title)}</span><span class="mshare-tag">${esc((x.type || '').toUpperCase())} · ${esc(x.status)}</span></div>`).join('') +
+            (d.docs.some((x) => x.project !== d.docs[0].project)
+              ? '<div class="muted mshare-note">注意：本主题名下的文档跨多个项目，将一并开放。</div>' : '');
+        } catch {
+          listEl.innerHTML = '<span class="muted">清单加载失败，请重试。</span>';
+        }
+      });
+      cancelBtn.addEventListener('click', () => { modal.hidden = true; });
+
+      createBtn.addEventListener('click', async () => {
+        errEl.hidden = true;
+        createBtn.disabled = true;
+        createBtn.textContent = '创建中…';
+        try {
+          const r = await fetch('/api/share', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ scope: 'module', topic: topicName, expires: expiry.value }),
+          });
+          const d = await r.json();
+          if (!r.ok) throw new Error(d.error || '创建失败');
+          urlEl.value = d.url;
+          resultEl.hidden = false;
+          listEl.innerHTML = `<span class="muted">已创建，开放 ${d.doc_count} 篇当前版文档。</span>`;
+        } catch (e) {
+          errEl.hidden = false;
+          errEl.textContent = e.message || '创建失败';
+        } finally {
+          createBtn.disabled = false;
+          createBtn.textContent = '创建链接';
+        }
+      });
+
+      copyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(urlEl.value);
+          copyBtn.textContent = '已复制 ✓';
+          setTimeout(() => (copyBtn.textContent = '复制'), 1500);
+        } catch {}
+      });
+    })();
+  </script>
 
   {versionChains.length > 0 && (
     <div style="margin-bottom:18px">

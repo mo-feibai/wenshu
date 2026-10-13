@@ -29,12 +29,14 @@ if CONFIG_PATH.exists():
 PASSWORD = config.get("password", "")
 PORT = int(config.get("port", 8903))
 SESSION_TTL = 7 * 24 * 3600
+# 分享过期后仍保留一段时间（不再授权，仅用于区分「已过期」与「链接无效」的提示文案）
+SHARE_EXPIRED_KEEP = 30 * 24 * 3600
 DOCS = pathlib.Path(config.get("docs_dir", "/opt/wenshu/docs"))
 API_TOKEN = config.get("api_token", "")
 
 sessions = {}
 shares = {}
-lock = threading.Lock()
+lock = threading.RLock()
 WRITE_LOCK = threading.Lock()
 
 PUBLIC_PREFIXES = ("/fonts/",)
@@ -73,7 +75,8 @@ def load_shares():
             data = json.loads(SHARES_PATH.read_text(encoding="utf-8"))
             t = now_ts()
             for token, item in data.items():
-                if item.get("expires", 0) > t:
+                # 过期记录保留 SHARE_EXPIRED_KEEP 天：不再授权，但能让访客看到「已过期」而非「链接无效」
+                if item.get("expires", 0) > t - SHARE_EXPIRED_KEEP:
                     shares[token] = item
         except Exception:
             pass
@@ -107,8 +110,9 @@ def purge_expired():
         for k in [k for k, v in sessions.items() if v < t]:
             del sessions[k]
             sessions_changed = True
-        for k in [k for k, v in shares.items() if v.get("expires", 0) < t]:
+        for k in [k for k, v in shares.items() if v.get("expires", 0) < t - SHARE_EXPIRED_KEEP]:
             del shares[k]
+            _SHARE_FILE_CACHE.pop(k, None)
             changed = True
         if changed:
             save_shares()
@@ -265,7 +269,17 @@ def resolve_ref(entries, ref: str):
 
 
 def doc_url(doc_id: str) -> str:
-    return "/docs/" + "/".join(urllib.parse.quote(seg) for seg in doc_id.lower().split("/")) + "/"
+    """文档 URL。与前端 helpers.ts 的 docUrl 保持一致：不做小写化，仅逐段编码。"""
+    return "/docs/" + "/".join(urllib.parse.quote(seg) for seg in doc_id.split("/")) + "/"
+
+
+def doc_path_key(url: str) -> str:
+    """把任意形态的 doc URL 归一化为比较键：解码 → 去尾斜杠 → 小写。
+
+    库内所有 id 比较（find_entry / resolve_ref）都是大小写不敏感的，
+    这里沿用同一约定，避免服务端与前端 URL 生成规则不一致导致授权失败。
+    """
+    return urllib.parse.unquote(url or "").split("?")[0].rstrip("/").lower()
 
 
 def save_entry_fields(entry, fields: dict):
@@ -297,6 +311,203 @@ def remove_entry_fields(entry, keys):
     entry["text"] = text
     for k in keys:
         entry["meta"].pop(k, None)
+
+
+# ---------------- 模块分享：当前版快照 ----------------
+
+_SNAPSHOT = None              # 不可变快照；读侧无锁，写侧整体替换
+_SHARE_FILE_CACHE = {}        # token -> {"files": set, "at": epoch}
+FILE_CACHE_TTL = 300
+
+
+def _entry_is_current(entry, superseded):
+    """是否「当前版」：没有新版本指向它 + 自身未被标记取代 + 非 archived + 未淘汰。
+
+    superseded_by 挂在旧版上（表示「我被谁取代」），因此它自身非空即历史版；
+    supersedes 是新版指向旧版的正向链接，取其反向集合可兼容未回填 superseded_by 的情况。
+    pending/draft 也算当前版（未实现的文档照样可以分享给外部）。
+    """
+    m = entry["meta"]
+    if str(m.get("status") or "").strip() == "archived":
+        return False
+    if str(m.get("retired_at") or "").strip():
+        return False
+    if str(m.get("superseded_by") or "").strip():
+        return False
+    return entry["id"] not in superseded
+
+
+def build_snapshot():
+    """构建快照：取代反向索引 + doc URL 索引 + 按 topic 分组的当前版清单。
+
+    「是否当前版」需要知道有没有别的文档用 supersedes 指向它，这是反向关系，
+    只能全库扫描得出。因此这里一次性算好后缓存，写操作后失效重建，
+    避免每次文档页请求都 O(N) 扫库。
+    """
+    entries = read_entries()
+    superseded = set()
+    for e in entries:
+        sp = str(e["meta"].get("supersedes") or "").strip()
+        if sp:
+            superseded.add(sp)
+    by_url = {}
+    modules = {}
+    for e in entries:
+        by_url[doc_path_key(doc_url(e["id"]))] = e
+        topic = str(e["meta"].get("topic") or "").strip()
+        if not topic or not _entry_is_current(e, superseded):
+            continue
+        modules.setdefault(topic, []).append(e)
+    for lst in modules.values():
+        lst.sort(key=lambda x: (str(x["meta"].get("date") or ""), x["id"]), reverse=True)
+    return {"by_url": by_url, "modules": modules}
+
+
+def snapshot():
+    global _SNAPSHOT
+    if _SNAPSHOT is None:
+        with lock:
+            if _SNAPSHOT is None:
+                _SNAPSHOT = build_snapshot()
+    return _SNAPSHOT
+
+
+def invalidate_snapshot():
+    """任何写操作后调用：快照与附件白名单都失效重建。"""
+    global _SNAPSHOT
+    with lock:
+        _SNAPSHOT = None
+        _SHARE_FILE_CACHE.clear()
+
+
+def module_scope(item):
+    """分享记录 → 规范化 scope；单篇分享返回 None。
+
+    scope 形如 {"topic": "助农", "projects": {"xingtai"} | None}；
+    projects 为空表示该 topic 名下的全部项目都包含（与主题页跨项目合并的展示一致）。
+    """
+    if not item or item.get("scope") != "module":
+        return None
+    topic = str(item.get("topic") or "").strip()
+    if not topic:
+        return None
+    raw = item.get("projects")
+    if isinstance(raw, str):
+        raw = [raw]
+    projs = {str(p).strip() for p in (raw or []) if str(p).strip()}
+    return {"topic": topic, "projects": projs or None}
+
+
+def module_entries(item):
+    """模块分享当前覆盖的文档（当前版 + 动态跟随）。"""
+    scope = module_scope(item)
+    if not scope:
+        return []
+    lst = snapshot()["modules"].get(scope["topic"], [])
+    if scope["projects"]:
+        lst = [e for e in lst if str(e["meta"].get("project") or "").strip() in scope["projects"]]
+    return lst
+
+
+def share_files(token, item):
+    """某分享的附件白名单：单篇=该文档引用的 /files/；模块=模块内全部文档的并集。带 TTL 缓存。"""
+    now = now_ts()
+    hit = _SHARE_FILE_CACHE.get(token)
+    if hit and hit["at"] + FILE_CACHE_TTL > now:
+        return hit["files"]
+    files = set()
+    if module_scope(item):
+        for e in module_entries(item):
+            files.update(extract_doc_files(doc_url(e["id"])))
+    else:
+        files.update(extract_doc_files(item.get("path", "")))
+    with lock:
+        _SHARE_FILE_CACHE[token] = {"files": files, "at": now}
+    return files
+
+
+def share_valid(item):
+    return bool(item) and not item.get("revoked_at") and item.get("expires", 0) > now_ts()
+
+
+def share_brief(token, item):
+    scope = module_scope(item)
+    brief = {
+        "token": token,
+        "scope": "module" if scope else "doc",
+        "path": item.get("path", ""),
+        "expires": item.get("expires", 0),
+        "created": item.get("created"),
+        "revoked": bool(item.get("revoked_at")),
+        "revoked_at": item.get("revoked_at"),
+    }
+    if scope:
+        brief["topic"] = scope["topic"]
+        brief["projects"] = sorted(scope["projects"]) if scope["projects"] else []
+        entries = module_entries(item)
+        brief["doc_count"] = len(entries)
+        brief["label"] = f"模块 · {scope['topic']}"
+        brief["docs"] = [{"id": e["id"], "title": str(e["meta"].get("title", "")),
+                          "type": str(e["meta"].get("type", "")),
+                          "status": str(e["meta"].get("status", ""))} for e in entries]
+    else:
+        entry = snapshot()["by_url"].get(doc_path_key(item.get("path", "")))
+        title = str(entry["meta"].get("title", "")) if entry else ""
+        brief["doc_count"] = 1 if entry else 0
+        brief["label"] = f"单篇 · {title}" if title else f"单篇 · {item.get('path', '')}"
+        brief["docs"] = [{"id": entry["id"], "title": title,
+                          "type": str(entry["meta"].get("type", "")),
+                          "status": str(entry["meta"].get("status", ""))}] if entry else []
+    return brief
+
+
+def _entry_body(entry):
+    """文档正文（不含 frontmatter / -- @meta），搜索与摘要共用。"""
+    if entry["kind"] == "md":
+        _, rest = parse_md(entry["text"])
+    else:
+        _, rest = parse_sql_meta(entry["text"])
+    return rest
+
+
+def _snippet(body, term, width=110):
+    """截取命中位置前后片段，返回 (片段, 是否前面被截断)。"""
+    idx = body.lower().find(term)
+    if idx < 0:
+        return None, False
+    start = max(0, idx - width // 2)
+    end = min(len(body), idx + len(term) + width)
+    frag = body[start:end].strip()
+    if "\n" in frag:
+        frag = " ".join(frag.split())
+    return frag, start > 0
+
+
+def search_module(items, term, limit=50):
+    """在给定文档集合内做朴素子串搜索（中文无需分词）。返回按命中数降序的结果。"""
+    q = term.strip()
+    if not q:
+        return []
+    ql = q.lower()
+    out = []
+    for e in items:
+        m = e["meta"]
+        body = _entry_body(e)
+        bl = body.lower()
+        title = str(m.get("title", ""))
+        hay = " ".join(str(m.get(k, "")) for k in ("title", "topic", "project", "summary")).lower()
+        if ql not in bl and ql not in hay:
+            continue
+        frag, head = _snippet(body, ql) or ("", False)
+        count = bl.count(ql) + hay.count(ql)
+        out.append({
+            "id": e["id"], "title": title,
+            "type": str(m.get("type", "")), "status": str(m.get("status", "")),
+            "url": doc_url(e["id"]), "hits": count,
+            "snippet": (("…" if head else "") + frag) if frag else (title or body[:110].strip()),
+        })
+    out.sort(key=lambda x: (-x["hits"], x["title"]))
+    return out[:limit]
 
 
 # ---------------- 生命周期淘汰 ----------------
@@ -352,10 +563,21 @@ def _inbound_refs(entries, entry):
 
 
 def _has_active_share(entry):
-    t = now_ts()
-    target = doc_url(entry["id"])
+    """是否有有效分享引用这篇文档（模块分享按作用域豁免其全部当前版文档）。"""
+    key = doc_path_key(doc_url(entry["id"]))
+    topic = str(entry["meta"].get("topic") or "").strip()
+    project = str(entry["meta"].get("project") or "").strip()
     for item in shares.values():
-        if item.get("expires", 0) > t and item.get("path") == target:
+        if not share_valid(item):
+            continue
+        scope = module_scope(item)
+        if scope:
+            if scope["topic"] != topic:
+                continue
+            if scope["projects"] and project not in scope["projects"]:
+                continue
+            return True
+        if doc_path_key(item.get("path", "")) == key:
             return True
     return False
 
@@ -592,6 +814,50 @@ LOGIN_HTML = """<!DOCTYPE html>
 """
 
 
+SHARE_NOTICE_HTML = """<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<meta name="robots" content="noindex" />
+<title>{{TITLE}}</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+<style>
+  @font-face { font-family: 'Maple Mono CN'; src: url('/fonts/MapleMono-CN-Regular.woff2') format('woff2'); font-weight: 400; font-display: swap; }
+  * { box-sizing: border-box; }
+  html { font-synthesis: none; -webkit-font-smoothing: antialiased; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+    background: #0a0e1a; color: #e8edf7;
+    font-family: 'Maple Mono CN', Consolas, monospace;
+  }
+  .card {
+    width: min(440px, calc(100% - 40px)); background: #111a2e;
+    border: 1px solid #1d2a45; border-radius: 18px; padding: 34px 30px 28px;
+    box-shadow: 0 24px 60px rgba(0,0,0,.45);
+  }
+  h1 { margin: 0 0 10px; font-size: 20px; letter-spacing: 1px; color: #6ea8fe; }
+  p { margin: 0 0 10px; font-size: 13.5px; line-height: 1.85; color: #c3ccdf; }
+  .muted { color: #8d99b3; font-size: 12.5px; }
+  .foot { margin-top: 22px; padding-top: 16px; border-top: 1px solid #1d2a45; }
+  a.btn {
+    display: inline-block; margin-top: 14px; padding: 9px 18px; border-radius: 10px;
+    background: linear-gradient(135deg, #6ea8fe, #a78bfa); color: #0a0e1a;
+    font-size: 13px; font-weight: 700; text-decoration: none; letter-spacing: 1px;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>{{TITLE}}</h1>
+    {{BODY}}
+    <div class="foot"><span class="muted">{{FOOT}}</span></div>
+  </div>
+</body>
+</html>
+"""
+
+
 class Handler(http.server.SimpleHTTPRequestHandler):
     server_version = "WenShu/1.1"
 
@@ -629,22 +895,48 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         sid = self.cookies().get("ws_sid")
         return bool(sid and sessions.get(sid, 0) > now_ts())
 
-    def share_grant(self):
-        token = self.cookies().get("ws_share")
-        item = shares.get(token) if token else None
-        if item and item.get("expires", 0) > now_ts():
-            item["files"] = extract_doc_files(item["path"])
-            return item
-        return None
+    def share_tokens(self):
+        """cookie 里可能同时持有多个分享 token（逗号分隔，向后兼容旧的单值）。"""
+        raw = self.cookies().get("ws_share") or ""
+        return [t for t in (x.strip() for x in raw.split(",")) if t]
 
-    def share_covers(self, grant, path):
-        target = urllib.parse.unquote(grant.get("path", ""))
-        if path == target or path.startswith(target):
-            return True
+    def remember_share_token(self, token, max_age):
+        """把 token 并入 cookie，保留其他仍有效的 token（上限 16 个防无限增长）。"""
+        toks = [t for t in self.share_tokens()
+                if t != token and share_valid(shares.get(t))]
+        toks.append(token)
+        self.queue_cookie("ws_share", ",".join(toks[-16:]), max_age)
+
+    def share_grants(self):
+        return [shares[t] for t in self.share_tokens() if share_valid(shares.get(t))]
+
+    def grant_denial(self, item, path):
+        """返回 None 表示该分享覆盖此路径；否则返回不可访问的原因文案。"""
         if any(path.startswith(p) for p in SHARE_ASSET_PREFIXES):
-            return True
+            return None
         if path.startswith("/files/"):
-            return path in set(grant.get("files", []))
+            token = next((t for t in self.share_tokens() if shares.get(t) is item), "")
+            return None if path in share_files(token, item) else "该分享不包含此附件"
+        scope = module_scope(item)
+        if not scope:
+            target = urllib.parse.unquote(item.get("path", "")).rstrip("/")
+            if path.rstrip("/") == target or path.rstrip("/").startswith(target + "/"):
+                return None
+            return "该分享不包含此内容"
+        # 模块分享：落地页 + 作用域内的当前版文档
+        bare = path.split("?")[0].rstrip("/")
+        if bare == "/topics/" + scope["topic"]:
+            return None
+        entry = snapshot()["by_url"].get(doc_path_key(path))
+        if entry and any(e["id"] == entry["id"] for e in module_entries(item)):
+            return None
+        return "该分享不包含此内容"
+
+    def grant_allows(self, path):
+        grants = self.share_grants()
+        for item in grants:
+            if self.grant_denial(item, path) is None:
+                return True
         return False
 
     def redirect(self, location, code=303):
@@ -672,6 +964,164 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         self.wfile.write(data)
+
+    def notice_page(self, title, lines, foot="文枢 · 分享链接", code=200, link=None):
+        body = "".join(f"<p>{escape(t)}</p>" for t in lines)
+        if link:
+            body += f'<a class="btn" href="{escape(link[1], quote=True)}">{escape(link[0])}</a>'
+        page = (SHARE_NOTICE_HTML.replace("{{TITLE}}", escape(title))
+                .replace("{{BODY}}", body)
+                .replace("{{FOOT}}", escape(foot)))
+        data = page.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(data)))
+        self.end_headers()
+        self.wfile.write(data)
+
+    def share_invalid_page(self, token):
+        """分享链接不可用的四种原因，给出可区分的文案。"""
+        item = shares.get(token)
+        if item is None:
+            return self.notice_page(
+                "分享链接无效",
+                ["这个链接不存在，或已被分享者删除。", "请向分享者索取新的链接。"],
+                link=("重新登录站点", "/login"))
+        if item.get("revoked_at"):
+            stamp = datetime.datetime.fromtimestamp(float(item["revoked_at"])).strftime("%Y-%m-%d %H:%M")
+            return self.notice_page(
+                "分享已被撤销",
+                ["分享者已主动撤销这份分享，链接即刻失效。", f"撤销时间：{stamp}"],
+                link=("重新登录站点", "/login"))
+        if item.get("expires", 0) <= now_ts():
+            stamp = datetime.datetime.fromtimestamp(float(item.get("expires", 0))).strftime("%Y-%m-%d %H:%M")
+            return self.notice_page(
+                "分享已过期",
+                [f"这份分享的有效期已于 {stamp} 结束。", "如仍需查看，请向分享者申请延长。"],
+                link=("重新登录站点", "/login"))
+        return self.notice_page("分享不可用", ["链接状态异常，请向分享者索取新链接。"])
+
+    def share_denied_page(self, reason):
+        return self.notice_page(
+            "该分享不包含此内容",
+            [reason, "这份分享只覆盖被分享者开放的那部分文档。"],
+            link=("返回分享首页", "/"))
+
+    # ---------- 分享 API（凭 ws_share cookie 鉴权） ----------
+    def _pick_share(self, qs):
+        """按客户端给出的上下文定位它所处的那一份分享（多token 时不会认错模块）。"""
+        grants = self.share_grants()
+        if not grants:
+            return None, []
+        topic = (qs.get("topic", [""])[0] or "").strip()
+        project = (qs.get("project", [""])[0] or "").strip()
+        path = (qs.get("path", [""])[0] or "").strip()
+        if topic:
+            for item in grants:
+                scope = module_scope(item)
+                if scope and scope["topic"] == topic and (
+                        not project or not scope["projects"] or project in scope["projects"]):
+                    return item, grants
+        key = doc_path_key(path)
+        for item in grants:
+            if not module_scope(item) and doc_path_key(item.get("path", "")) == key:
+                return item, grants
+        # 模块分享的文档页：按文档反查它属于哪个分享（页面本身不知道自己的主题）
+        if path:
+            entry = snapshot()["by_url"].get(key)
+            if entry:
+                for item in grants:
+                    if any(e["id"] == entry["id"] for e in module_entries(item)):
+                        return item, grants
+        return None, grants
+
+    def api_share_ctx(self, qs):
+        """访客侧上下文：我是哪个模块的访客 + 该模块当前可见文档清单（驱动侧栏与标题）。"""
+        picked, grants = self._pick_share(qs)
+        if not picked:
+            return self.json_response(404, {"error": "当前浏览器没有覆盖此页面的分享", "grants": len(grants)})
+        scope = module_scope(picked)
+        entry = snapshot()["by_url"].get(doc_path_key(qs.get("path", [""])[0] or ""))
+        if not scope:
+            return self.json_response(200, {
+                "scope": "doc", "expires": picked.get("expires", 0), "docs": [], "search": True,
+                "topic": str(entry["meta"].get("topic", "")) if entry else "",
+                "project": str(entry["meta"].get("project", "")) if entry else "",
+            })
+        entries = module_entries(picked)
+        return self.json_response(200, {
+            "scope": "module", "topic": scope["topic"], "expires": picked.get("expires", 0),
+            "projects": sorted(scope["projects"]) if scope["projects"] else [],
+            "search": True,
+            "docs": [{"id": e["id"], "title": str(e["meta"].get("title", "")),
+                      "type": str(e["meta"].get("type", "")), "status": str(e["meta"].get("status", "")),
+                      "url": doc_url(e["id"])} for e in entries],
+        })
+
+    def api_share_search(self, qs):
+        """模块内全文搜索：实时读文档库源文件做朴素子串匹配（中文无需分词）。"""
+        term = (qs.get("q", [""])[0] or "").strip()
+        if not term:
+            return self.json_response(400, {"error": "缺少搜索词"})
+        if len(term) > 100:
+            return self.json_response(400, {"error": "搜索词过长"})
+        picked, grants = self._pick_share(qs)
+        if not picked:
+            return self.json_response(404, {"error": "当前分享不覆盖此范围", "grants": len(grants)})
+        scope = module_scope(picked)
+        scope = module_scope(picked)
+        if scope:
+            pool = module_entries(picked)
+        else:
+            entry = snapshot()["by_url"].get(doc_path_key(qs.get("path", [""])[0] or ""))
+            pool = [entry] if entry else []
+        results = search_module(pool, term)
+        return self.json_response(200, {"scope": scope["topic"] if scope else "doc",
+                                        "count": len(results), "results": results})
+
+    # ---------- 分享管理（凭站点登录鉴权） ----------
+    def api_shares_list(self):
+        out = []
+        for token, item in shares.items():
+            brief = share_brief(token, item)
+            if brief["revoked"]:
+                brief["state"] = "revoked"
+            elif item.get("expires", 0) <= now_ts():
+                brief["state"] = "expired"
+            else:
+                brief["state"] = "active"
+            out.append(brief)
+        out.sort(key=lambda x: (-float(x.get("expires") or 0), x.get("created") or 0))
+        return self.json_response(200, {"count": len(out), "shares": out})
+
+    def api_module_docs(self, qs):
+        """某主题当前版文档清单（主题页「分享本主题」二次确认用，登录即可访问）。"""
+        topic = (qs.get("topic", [""])[0] or "").strip()
+        if not topic:
+            return self.json_response(400, {"error": "topic 必填"})
+        entries = snapshot()["modules"].get(topic, [])
+        return self.json_response(200, {
+            "topic": topic, "count": len(entries),
+            "docs": [{"id": e["id"], "title": str(e["meta"].get("title", "")),
+                      "type": str(e["meta"].get("type", "")),
+                      "status": str(e["meta"].get("status", "")),
+                      "project": str(e["meta"].get("project", "")), "url": doc_url(e["id"])}
+                     for e in entries],
+        })
+
+    def api_share_revoke(self, payload):
+        token = str(payload.get("token", "")).strip()
+        item = shares.get(token)
+        if not item:
+            return self.json_response(404, {"error": "分享不存在"})
+        if item.get("revoked_at"):
+            return self.json_response(200, {"token": token, "revoked": True, "unchanged": True})
+        with lock:
+            item["revoked_at"] = now_ts()
+            _SHARE_FILE_CACHE.pop(token, None)
+            save_shares()
+        return self.json_response(200, {"token": token, "revoked": True,
+                                        "scope": module_scope(item)["topic"] if module_scope(item) else "doc"})
 
     # ---------- Admin API ----------
     def api_auth(self):
@@ -778,6 +1228,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             run_git(["add", "-A"])
             code, _, _ = run_git(["commit", "-m", msg])
             _, commit, _ = run_git(["rev-parse", "--short", "HEAD"])
+            invalidate_snapshot()
             info.update({"ok": True, "built": True, "commit": commit if code == 0 else ""})
             return self.json_response(200, info)
 
@@ -1148,11 +1599,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if not entry:
                 raise ApiError(404, "文档不存在: " + doc_id)
             meta = entry["meta"]
-            if str(meta.get("superseded_by") or "").strip():
-                raise ApiError(400, "该文档已被新版替代（历史版本），请确认后删除")
-            # 使指向该文档的分享立即失效
-            target = doc_url(entry["id"])
-            dead = [k for k, v in shares.items() if v.get("path") == target]
+            if str(meta.get("superseded_by") or "").strip() and not payload.get("force"):
+                raise ApiError(400, "该文档是已被新版替代的历史版本；确认要删除请传 force=true")
+            # 使指向该文档的单篇分享立即失效（模块分享按作用域动态跟随，不整体作废）
+            target = doc_path_key(doc_url(entry["id"]))
+            dead = [k for k, v in shares.items()
+                    if not module_scope(v) and doc_path_key(v.get("path", "")) == target]
             for k in dead:
                 del shares[k]
             if dead:
@@ -1287,6 +1739,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         purge_expired()
         parsed = urllib.parse.urlparse(self.path)
         path = urllib.parse.unquote(parsed.path)
+        qs = urllib.parse.parse_qs(parsed.query)
         if path == "/login":
             return self.login_page()
         if path == "/logout":
@@ -1295,10 +1748,21 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self.redirect("/login")
         if path.startswith("/s/"):
             return self.consume_share(path[3:])
+        if path == "/api/share/ctx":
+            return self.api_share_ctx(qs)
+        if path == "/api/share/search":
+            return self.api_share_search(qs)
+        if path == "/api/shares":
+            if not self.is_authed():
+                return self.json_response(401, {"error": "未登录"})
+            return self.api_shares_list()
+        if path == "/api/module-docs":
+            if not self.is_authed():
+                return self.json_response(401, {"error": "未登录"})
+            return self.api_module_docs(qs)
         if path.startswith("/api/admin/"):
             if not self.api_auth():
                 return self.json_response(401, {"error": "API Key 无效"})
-            qs = urllib.parse.parse_qs(parsed.query)
             if path == "/api/admin/pending":
                 return self.admin_pending()
             if path == "/api/admin/context":
@@ -1311,24 +1775,31 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/api/review":
             if not self.is_authed():
                 return self.json_response(401, {"error": "未登录"})
-            return self.admin_review(urllib.parse.parse_qs(parsed.query))
+            return self.admin_review(qs)
         if self.is_authed() or path in PUBLIC_FILES or any(path.startswith(p) for p in PUBLIC_PREFIXES):
             return super().do_GET()
-        grant = self.share_grant()
-        if grant and self.share_covers(grant, path):
-            return super().do_GET()
+        grants = self.share_grants()
+        if grants:
+            reasons = [self.grant_denial(g, path) for g in grants]
+            if any(r is None for r in reasons):
+                return super().do_GET()
+            return self.share_denied_page(reasons[0])
+        # 曾经持有分享但现已全部失效（过期/撤销）→ 给失效说明页，而不是让人误以为需要密码
+        for token in self.share_tokens():
+            if token in shares:
+                return self.share_invalid_page(token)
         return self.redirect("/login?next=" + urllib.parse.quote(self.path))
 
     def consume_share(self, token):
         item = shares.get(token)
-        if not item or item.get("expires", 0) < now_ts():
-            return self.redirect("/login")
-        if "files" not in item:
-            item["files"] = extract_doc_files(item["path"])
-            with lock:
-                save_shares()
+        if not share_valid(item):
+            return self.share_invalid_page(token)
         remain = int(item["expires"] - now_ts())
-        self.queue_cookie("ws_share", token, max(remain, 60))
+        self.remember_share_token(token, max(remain, 60))
+        scope = module_scope(item)
+        if scope:
+            # 落地页不带 token：凭证只在入口出现一次，之后靠 cookie 判定
+            return self.redirect("/topics/" + urllib.parse.quote(scope["topic"]) + "/?share=1")
         target = item["path"]
         if "?" not in target:
             target += "?share=1"
@@ -1358,23 +1829,57 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 payload = json.loads(body.decode("utf-8"))
             except Exception:
                 return self.json_response(400, {"error": "请求格式错误"})
-            target = payload.get("path", "")
-            expires_raw = payload.get("expires", "")
-            if not isinstance(target, str) or not target.startswith("/docs/"):
-                return self.json_response(400, {"error": "只能分享单篇文档"})
-            target = urllib.parse.quote(urllib.parse.unquote(target), safe="/")
             try:
-                exp_ts = datetime.datetime.fromisoformat(expires_raw).timestamp()
+                exp_ts = datetime.datetime.fromisoformat(str(payload.get("expires", ""))).timestamp()
             except Exception:
                 return self.json_response(400, {"error": "到期时间格式错误"})
             if exp_ts <= now_ts():
                 return self.json_response(400, {"error": "到期时间必须晚于现在"})
+            scope_kind = str(payload.get("scope") or "doc")
             token = secrets.token_urlsafe(16)
-            with lock:
-                shares[token] = {"path": target, "expires": exp_ts, "files": extract_doc_files(target)}
-                save_shares()
             host = self.headers.get("Host", f"127.0.0.1:{PORT}")
-            return self.json_response(200, {"url": f"http://{host}/s/{token}", "expires": expires_raw})
+            # 注意：快照解析放在加锁之外（snapshot 内部会取 lock）
+            snap = snapshot()
+            if scope_kind == "module":
+                topic = str(payload.get("topic", "")).strip()
+                if not topic:
+                    return self.json_response(400, {"error": "模块分享需要 topic"})
+                projects = payload.get("projects")
+                if isinstance(projects, str):
+                    projects = [projects]
+                projects = sorted({str(p).strip() for p in (projects or []) if str(p).strip()})
+                covered = [e for e in snap["modules"].get(topic, [])
+                           if not projects or str(e["meta"].get("project") or "").strip() in projects]
+                if not covered:
+                    return self.json_response(400, {"error": f"主题「{topic}」下没有可分享的当前版文档"})
+                record = {"scope": "module", "topic": topic, "projects": projects,
+                          "expires": exp_ts, "created": now_ts(), "files": []}
+            else:
+                target = payload.get("path", "")
+                if not isinstance(target, str) or not target.startswith("/docs/"):
+                    return self.json_response(400, {"error": "单篇分享只能分享文档页"})
+                target = urllib.parse.quote(urllib.parse.unquote(target), safe="/")
+                if not snap["by_url"].get(doc_path_key(target)):
+                    return self.json_response(400, {"error": "文档不存在或未构建"})
+                record = {"scope": "doc", "path": target, "expires": exp_ts,
+                          "created": now_ts(), "files": extract_doc_files(target)}
+            with lock:
+                shares[token] = record
+                save_shares()
+            return self.json_response(200, {
+                "url": f"http://{host}/s/{token}", "expires": payload.get("expires"),
+                "scope": record["scope"], "token": token,
+                "topic": record.get("topic", ""),
+                "doc_count": len(covered) if scope_kind == "module" else 1,
+            })
+        if parsed.path == "/api/shares/revoke":
+            if not self.is_authed():
+                return self.json_response(401, {"error": "未登录"})
+            try:
+                payload = json.loads(body.decode("utf-8")) if body else {}
+            except Exception:
+                return self.json_response(400, {"error": "JSON 格式错误"})
+            return self.api_share_revoke(payload)
         if parsed.path.startswith("/api/admin/"):
             if not self.api_auth():
                 return self.json_response(401, {"error": "API Key 无效"})

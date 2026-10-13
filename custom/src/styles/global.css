@@ -255,11 +255,18 @@ mark.search-hit.current {
 }
 
 /* 分享访客视图：只呈现文档内容 */
-.shared .sidebar { display: none; }
-.shared .shell { grid-template-columns: 1fr; }
-.shared .search-wrap, .shared .pending-chip { display: none; }
-.shared #flip-btn, .shared .related-block,
-.shared .version-block, .shared .actions-block { display: none; }
+/* 单篇分享：隐藏全站外壳。模块分享需要保留侧栏（改为模块清单）与搜索框（模块内搜索），
+   因此这些隐藏规则只对「非模块」的分享生效。 */
+html.shared:not(.module-mode) .sidebar { display: none; }
+html.shared:not(.module-mode) .shell { grid-template-columns: 1fr; }
+html.shared:not(.module-mode) .search-wrap,
+html.shared:not(.module-mode) .pending-chip { display: none; }
+.shared #flip-btn, .shared .version-block, .shared .actions-block { display: none; }
+/* 模块分享：related 区块由脚本按模块范围过滤后整体隐藏；单篇分享沿用整体隐藏 */
+.shared:not(.module-mode) .related-block { display: none; }
+/* 模块模式的侧栏只显示模块清单，隐藏全站导航与退出入口 */
+html.module-mode .sidebar nav, html.module-mode .sidebar-footer { display: none; }
+html.module-mode .search-wrap { display: block; }
 
 .content { padding: 28px 36px 60px; max-width: 1180px; margin: 0 auto; }
 
@@ -276,6 +283,53 @@ mark.search-hit.current {
 .badge.archived { color: var(--faint); background: var(--border-soft); }
 .badge.stale { color: var(--amber); background: var(--amber-soft); border-color: color-mix(in srgb, var(--amber) 34%, transparent); }
 .badge.retired { color: var(--faint); background: var(--border-soft); border-color: var(--border); }
+
+/* ---------- 模块分享 ---------- */
+.module-share { margin-top: 14px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.mshare-note-inline { color: var(--faint); font-size: 12px; }
+.mshare-list {
+  margin: 12px 0; padding: 10px 12px; max-height: 220px; overflow-y: auto;
+  border: 1px solid var(--border); border-radius: 10px; background: var(--bg-soft);
+  font-size: 12.5px; line-height: 1.7;
+}
+.mshare-item { display: flex; gap: 8px; align-items: baseline; justify-content: space-between; }
+.mshare-item > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.mshare-tag { color: var(--faint); font-size: 11px; flex-shrink: 0; }
+.mshare-note { margin-top: 8px; color: var(--amber); }
+.quick-btn[data-active] { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
+
+.side-module-head {
+  display: flex; align-items: baseline; justify-content: space-between; gap: 8px;
+  padding: 2px 10px 8px; margin-bottom: 6px; border-bottom: 1px solid var(--border);
+}
+.side-module-title { font-size: 13px; font-weight: 700; color: var(--text); }
+.side-module-count { font-size: 11px; color: var(--faint); flex-shrink: 0; }
+/* 模块清单必须常驻展开（项目树的 .side-topics 默认折叠隐藏，这里覆盖） */
+.side-topics.module { display: block !important; margin-top: 0; }
+.share-empty { color: var(--muted); font-size: 13px; }
+
+/* 分享管理表：等宽数字列不换行，范围列可长可短 */
+.pending-table td.mono, .pending-table td.muted { white-space: nowrap; }
+.pending-table td:nth-child(2) { max-width: 320px; overflow: hidden; text-overflow: ellipsis; }
+.pending-table th:nth-child(3), .pending-table td:nth-child(3) { white-space: nowrap; min-width: 64px; }
+/* 分享管理：表格宽度自适应，操作列不被挤出视口 */
+.shares-scroll { overflow-x: auto; }
+.shares-table { width: 100%; min-width: 760px; table-layout: fixed; }
+.shares-table th, .shares-table td { padding-left: 8px; padding-right: 8px; }
+.shares-table col.c-state { width: 72px; }
+.shares-table col.c-scope { width: auto; }
+.shares-table col.c-docs { width: 64px; }
+.shares-table col.c-time { width: 132px; }
+.shares-table col.c-left { width: 96px; }
+.shares-table col.c-act { width: 168px; }
+.shares-table td:nth-child(2) { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.shares-table th:last-child, .shares-table td:last-child { white-space: nowrap; text-align: right; }
+.shares-table td:last-child .copy-btn + .copy-btn { margin-left: 6px; }
+.copy-btn.danger { color: #f87171; border-color: color-mix(in srgb, #f87171 40%, transparent); }
+.copy-btn.danger:hover { background: color-mix(in srgb, #f87171 12%, transparent); }
+
+/* 分享访客：隐藏全站项目树（模块模式由脚本换成模块清单） */
+html.shared .side-project { display: none; }
 .badge.type { color: var(--muted); background: transparent; border-color: var(--border); font-weight: 400; }
 
 .hero { margin: 6px 0 22px; }

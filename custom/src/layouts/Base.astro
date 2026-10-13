@@ -78,6 +78,7 @@ const totalPending = entries.filter((e) => e.data.status === 'pending').length;
             待办看板 <span class="badge-count warning">{totalPending}</span>
           </a>
           <a class={`nav-item ${path.startsWith('/review') ? 'active' : ''}`} href="/review/">淘汰审阅</a>
+          <a class={`nav-item ${path.startsWith('/shares') ? 'active' : ''}`} href="/shares/">分享管理</a>
           <a class="nav-item" href="/swagger/">接口交互</a>
         </nav>
         {projects.map((p) => {
@@ -122,6 +123,112 @@ const totalPending = entries.filter((e) => e.data.status === 'pending').length;
       const saved = localStorage.getItem('ws-theme');
       if (saved) html.dataset.theme = saved;
       if (new URLSearchParams(location.search).get('share') === '1') html.classList.add('shared');
+      const isShareView = new URLSearchParams(location.search).get('share') === '1';
+
+      /* 模块分享模式：向服务端确认当前访客的分享作用域，再据此裁剪导航与搜索 */
+      function moduleTopicOf() {
+        const m = location.pathname.match(/^\/topics\/([^/]+)\/?$/);
+        return m ? decodeURIComponent(m[1]) : '';
+      }
+      function decodePath(p) {
+        try { return decodeURIComponent(p); } catch { return p; }
+      }
+      async function bootShareScope() {
+        if (!isShareView) return;
+        const qs = new URLSearchParams({ path: location.pathname });
+        const topic = moduleTopicOf();
+        if (topic) qs.set('topic', topic);
+        qs.set('path', location.pathname);
+        let ctx = null;
+        try {
+          const res = await fetch('/api/share/ctx?' + qs);
+          if (res.ok) ctx = await res.json();
+        } catch { ctx = null; }
+        if (!ctx) return;
+        window.__wsShareScope = { topic: ctx.topic || '', project: ctx.project || '' };
+        if (ctx.scope !== 'module') return;
+        /* 模块模式：保留侧栏与搜索框（内容换成模块清单与模块内搜索） */
+        html.classList.add('module-mode');
+
+        /* 侧栏：隐藏全站导航与项目树，换成本模块文档清单（站外标题一个都不泄露） */
+        const sb = document.querySelector('.sidebar');
+        if (sb) {
+          sb.querySelectorAll('nav, .side-project').forEach((n) => (n.style.display = 'none'));
+          const head = document.createElement('div');
+          head.className = 'side-module-head';
+          head.innerHTML = '<span class="side-module-title"></span><span class="side-module-count"></span>';
+          head.querySelector('.side-module-title').textContent = ctx.topic;
+          head.querySelector('.side-module-count').textContent = ctx.docs.length + ' 篇';
+          const list = document.createElement('div');
+          list.className = 'side-topics module';
+          const here = decodePath(location.pathname).replace(/\/$/, '');
+          for (const d of ctx.docs) {
+            const a = document.createElement('a');
+            a.className = 'side-topic' + (decodePath(d.url).replace(/\/$/, '') === here ? ' active' : '');
+            a.href = d.url + '?share=1';
+            const s1 = document.createElement('span');
+            s1.textContent = d.title;
+            const s2 = document.createElement('span');
+            s2.className = 'count';
+            s2.textContent = (d.type || '').toUpperCase();
+            a.append(s1, s2);
+            list.appendChild(a);
+          }
+          sb.insertBefore(list, sb.firstChild);
+          sb.insertBefore(head, sb.firstChild);
+          const active = sb.querySelector('.side-topic.active');
+          if (active && sb.clientHeight) {
+            const rel = active.getBoundingClientRect().top - sb.getBoundingClientRect().top;
+            if (rel < 0 || rel + active.offsetHeight > sb.clientHeight) sb.scrollTop += rel - 16;
+          }
+        }
+        /* 相关文档：只保留指向模块内文档的链接 */
+        const allowed = new Set(ctx.docs.map((d) => decodePath(d.url).replace(/\/$/, '')));
+        document.querySelectorAll('.related-block .meta-links a').forEach((a) => {
+          const href = decodePath(a.getAttribute('href') || '').replace(/\/$/, '');
+          if (!allowed.has(href)) a.remove();
+        });
+        document.querySelectorAll('.related-block').forEach((b) => {
+          if (!b.querySelector('.meta-links a')) b.remove();
+        });
+        /* 搜索框提示语改成模块语义 */
+        const q = document.getElementById('q');
+        if (q) q.placeholder = '在本模块内搜索（Ctrl+K）';
+
+        /* 主题落地页：只保留模块清单，隐藏历史版本链与内部操作入口 */
+        if (topic) {
+          document.querySelectorAll('.version-chain').forEach((n) => n.remove());
+          document.querySelectorAll('.module-share').forEach((n) => n.remove());
+          const allowedLanding = new Set(ctx.docs.map((d) => decodePath(d.url).replace(/\/$/, '')));
+          const tl = document.querySelector('.timeline');
+          if (tl) {
+            let hidden = 0;
+            tl.querySelectorAll('.tl-item').forEach((item) => {
+              const a = item.querySelector('a[href]');
+              const href = a ? decodePath(a.getAttribute('href') || '').replace(/\/$/, '') : '';
+              if (!allowedLanding.has(href)) { item.remove(); hidden++; }
+            });
+            const hero = document.querySelector('.hero');
+            const sub = hero && hero.querySelector('p');
+            if (sub && hidden) {
+              sub.textContent = `本模块开放 ${ctx.docs.length} 篇当前版文档`
+                + (hidden ? `（已隐藏 ${hidden} 篇历史版本、已归档或已淘汰文档）` : '');
+            }
+            if (!ctx.docs.length) tl.remove();
+          }
+        }
+        /* 落地页无文档时的提示 */
+        if (topic && ctx.docs.length === 0) {
+          const hero = document.querySelector('.hero');
+          if (hero && !hero.querySelector('.share-empty')) {
+            const p = document.createElement('p');
+            p.className = 'share-empty';
+            p.textContent = '本模块暂无可访问的文档。';
+            hero.appendChild(p);
+          }
+        }
+      }
+      bootShareScope();
       document.getElementById('theme-toggle')?.addEventListener('click', () => {
         html.dataset.theme = html.dataset.theme === 'dark' ? 'light' : 'dark';
         localStorage.setItem('ws-theme', html.dataset.theme);
@@ -198,6 +305,12 @@ const totalPending = entries.filter((e) => e.data.status === 'pending').length;
         if (!index) index = await (await fetch('/search-index.json')).json();
         return index;
       }
+      function hlSnippet(snippet, term) {
+        const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+        const text = esc(snippet || '');
+        const safe = String(term ?? '').replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        return safe ? text.replace(new RegExp(safe.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'gi'), (m) => `<mark class="search-hit">${m}</mark>`) : text;
+      }
       function renderHits(hits) {
         const query = input ? input.value.trim() : '';
         const withQ = (u) => u + (u.includes('?') ? '&' : '?') + 'q=' + encodeURIComponent(query);
@@ -206,9 +319,35 @@ const totalPending = entries.filter((e) => e.data.status === 'pending').length;
           : '<div class="empty">无结果</div>';
         box.hidden = false;
       }
+
+      /* 模块分享：搜索限定在分享作用域内（服务端接口），不走 Pagefind 全站索引 */
+      async function searchShared(q) {
+        const sp = window.__wsShareScope;
+        if (!sp) return false;
+        try {
+          const qs = new URLSearchParams({ q, topic: sp.topic || '' });
+          if (sp.project) qs.set('project', sp.project);
+          const res = await fetch('/api/share/search?' + qs);
+          if (!res.ok) return false;
+          const data = await res.json();
+          const hits = (data.results || []).map((r) => ({
+            url: r.url + '?share=1&q=' + encodeURIComponent(q),
+            title: r.title,
+            meta: [r.type, r.status ? (statusText[r.status] || r.status) : ''].filter(Boolean).join(' · '),
+            excerpt: hlSnippet(r.snippet, q),
+          }));
+          renderHits(hits);
+          if (!hits.length) { box.innerHTML = '<div class="empty">本模块内无结果</div>'; box.hidden = false; }
+          return true;
+        } catch {
+          return false;
+        }
+      }
+
       input?.addEventListener('input', debounce(async () => {
         const q = input.value.trim();
         if (!q) { box.hidden = true; box.innerHTML = ''; return; }
+        if (await searchShared(q)) return;
         const engine = await ensurePagefind();
         if (engine) {
           const search = await engine.search(q);

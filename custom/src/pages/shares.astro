@@ -1,0 +1,94 @@
+---
+import Base from '../layouts/Base.astro';
+---
+
+<Base>
+  <section class="hero">
+    <h1>分享管理</h1>
+    <p>列出全部有效与历史分享，可复制链接、一键撤销。撤销后访客立即看到失效提示。</p>
+  </section>
+
+  <div id="shares-app">
+    <div style="color:var(--muted);text-align:center;padding:24px">加载中…</div>
+  </div>
+</Base>
+
+<script is:inline>
+  (() => {
+    const app = document.getElementById('shares-app');
+    const esc = (s) => String(s ?? '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    const fmt = (ts) => {
+      if (!ts) return '—';
+      const d = new Date(Number(ts) * 1000);
+      const p = (n) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+    };
+    const STATUS = { active: '有效', expired: '已过期', revoked: '已撤销' };
+    const STATUS_CLASS = { active: 'pending', expired: 'archived', revoked: 'archived' };
+
+    function render(data) {
+      const rows = (data.shares || []).map((s) => {
+        const url = `${location.origin}/s/${s.token}`;
+        const left = s.state === 'active'
+          ? `剩 ${Math.max(0, Math.ceil((s.expires - Date.now() / 1000) / 86400))} 天`
+          : (s.state === 'expired' ? `已于 ${fmt(s.expires)} 到期` : `已于 ${fmt(s.revoked_at)} 撤销`);
+        return `<tr>
+          <td><span class="badge ${STATUS_CLASS[s.state]}">${STATUS[s.state]}</span></td>
+          <td>${esc(s.label || s.path || '')}</td>
+          <td>${s.doc_count || 0} 篇</td>
+          <td class="mono">${fmt(s.created)}</td>
+          <td class="mono">${fmt(s.expires)}</td>
+          <td class="muted">${esc(left)}</td>
+          <td>
+            <button class="copy-btn" data-copy="${esc(url)}" data-label="复制">复制链接</button>
+            ${s.state === 'active'
+              ? `<button class="copy-btn danger" data-revoke="${esc(s.token)}">撤销</button>`
+              : ''}
+          </td>
+        </tr>`;
+      }).join('');
+      app.innerHTML = `<div class="shares-scroll"><table class="pending-table shares-table">
+        <colgroup>
+          <col class="c-state" /><col class="c-scope" /><col class="c-docs" />
+          <col class="c-time" /><col class="c-time" /><col class="c-left" /><col class="c-act" />
+        </colgroup>
+        <thead><tr><th>状态</th><th>范围</th><th>文档</th><th>创建</th><th>到期</th><th>备注</th><th>操作</th></tr></thead>
+        <tbody>${rows || '<tr><td colspan="7" style="text-align:center;color:var(--faint)">还没有任何分享</td></tr>'}</tbody>
+      </table></div>`;
+      bind();
+    }
+
+    function bind() {
+      app.querySelectorAll('[data-revoke]').forEach((btn) => {
+        btn.addEventListener('click', async () => {
+          if (!confirm('撤销后该分享立即失效，链接不再可用。确认撤销？')) return;
+          btn.disabled = true;
+          try {
+            const r = await fetch('/api/shares/revoke', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ token: btn.dataset.revoke }),
+            });
+            const d = await r.json();
+            if (!r.ok) throw new Error(d.error || '撤销失败');
+            await load();
+          } catch (e) {
+            alert(e.message || '撤销失败');
+            btn.disabled = false;
+          }
+        });
+      });
+    }
+
+    async function load() {
+      try {
+        const r = await fetch('/api/shares');
+        if (r.status === 401) { location.href = '/login?next=/shares/'; return; }
+        render(await r.json());
+      } catch (e) {
+        app.innerHTML = `<p style="color:#f87171;text-align:center;padding:24px">加载失败：${esc(e.message)}</p>`;
+      }
+    }
+    load();
+  })();
+</script>
