@@ -965,10 +965,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def notice_page(self, title, lines, foot="文枢 · 分享链接", code=200, link=None):
+    def notice_page(self, title, lines, foot="文枢 · 分享链接", code=200, link=None, links=None):
         body = "".join(f"<p>{escape(t)}</p>" for t in lines)
-        if link:
-            body += f'<a class="btn" href="{escape(link[1], quote=True)}">{escape(link[0])}</a>'
+        for text, href in ([link] if link else []) + list(links or []):
+            body += f'<a class="btn" href="{escape(href, quote=True)}">{escape(text)}</a>'
         page = (SHARE_NOTICE_HTML.replace("{{TITLE}}", escape(title))
                 .replace("{{BODY}}", body)
                 .replace("{{FOOT}}", escape(foot)))
@@ -1001,11 +1001,20 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 link=("重新登录站点", "/login"))
         return self.notice_page("分享不可用", ["链接状态异常，请向分享者索取新链接。"])
 
-    def share_denied_page(self, reason):
+    def share_denied_page(self, reason, item=None):
+        # 「返回分享首页」应回到这份分享自己的落地页（单篇=文档页，模块=主题页），
+        # 并额外给出「以站点密码登录」出口，避免站点主人被卡死在这页。
+        home = "/"
+        scope = module_scope(item) if item else None
+        if scope:
+            home = "/topics/" + urllib.parse.quote(scope["topic"]) + "/?share=1"
+        elif item and item.get("path"):
+            home = item["path"] + ("&" if "?" in item["path"] else "?") + "share=1"
+        nxt = "/login?next=" + urllib.parse.quote(self.path)
         return self.notice_page(
             "该分享不包含此内容",
             [reason, "这份分享只覆盖被分享者开放的那部分文档。"],
-            link=("返回分享首页", "/"))
+            links=[("返回分享首页", home), ("以站点密码登录", nxt)])
 
     # ---------- 分享 API（凭 ws_share cookie 鉴权） ----------
     def _pick_share(self, qs):
@@ -1783,7 +1792,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             reasons = [self.grant_denial(g, path) for g in grants]
             if any(r is None for r in reasons):
                 return super().do_GET()
-            return self.share_denied_page(reasons[0])
+            # 站点外壳页（根目录、主题、看板等）不属于任何分享，但站点主人日常要访问：
+            # 回退到登录跳转而不是「无权页」，否则打开站点根会像坏掉一样。
+            # /docs/ 与 /files/ 保留无权页——那里「不包含此内容」才是有用的信息。
+            if not (path.startswith("/docs/") or path.startswith("/files/")):
+                return self.redirect("/login?next=" + urllib.parse.quote(self.path))
+            denied_item = next((g for g in grants if g is not None), grants[0])
+            return self.share_denied_page(reasons[0], denied_item)
         # 曾经持有分享但现已全部失效（过期/撤销）→ 给失效说明页，而不是让人误以为需要密码
         for token in self.share_tokens():
             if token in shares:
