@@ -50,12 +50,13 @@ const flipCopy = `请将文枢文档「${entry.data.title}」的状态从 pendin
   <div class="breadcrumb">
     <a href={`/topics/${encodeURIComponent(entry.data.topic)}/`}>{entry.data.topic}</a>
     {' / '}
-    {entry.data.project}{entry.data.domain ? ` · ${entry.data.domain}` : ''}
+    <a href={`/projects/${encodeURIComponent(entry.data.project)}/`}>{entry.data.project}</a>{entry.data.domain ? ` · ${entry.data.domain}` : ''}
   </div>
 
   <div class="doc-grid">
     <article data-pagefind-body{entry.data.retired_at ? ' data-pagefind-ignore' : ''}>
-      <span data-pagefind-meta="project" hidden>{entry.data.project || entry.data.topic || ''}</span>
+      <span data-pagefind-meta="topic" hidden>{entry.data.topic}</span>
+      <span data-pagefind-meta="project" hidden>{entry.data.project}</span>
       <span data-pagefind-meta="status" hidden>{entry.data.status}</span>
       <span data-pagefind-meta="type" hidden>{entry.data.type}</span>
       <header class="doc-head">

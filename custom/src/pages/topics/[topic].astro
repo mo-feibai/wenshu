@@ -4,7 +4,7 @@ import Base from '../../layouts/Base.astro';
 import EntryCard from '../../components/EntryCard.astro';
 import StatusBadge from '../../components/StatusBadge.astro';
 import { chainTitle, versionFamilies } from '../../lib/helpers';
-const assetsRaw = {assets: []};
+import assetsRaw from '../../data/assets.json';
 
 export async function getStaticPaths() {
   const entries = await getCollection('docs');

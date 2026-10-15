@@ -376,6 +376,31 @@ html.shared .side-project { display: none; }
 .project-card h3 { margin: 0 0 6px; font-size: 15px; }
 .project-card .meta { color: var(--muted); font-size: 12px; display: flex; gap: 10px; flex-wrap: wrap; }
 
+/* ---------- 项目页（按类型分组） ---------- */
+.project-hero { margin: 6px 0 22px; }
+.project-hero h1 { margin: 0 0 8px; font-size: 30px; letter-spacing: 1px; }
+.project-stats { display: flex; gap: 18px; color: var(--muted); font-size: 13px; }
+.project-stats b { color: var(--text); }
+.project-hero .type-filter { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 14px; }
+.project-hero .chip { text-decoration: none; display: inline-flex; gap: 5px; align-items: center; }
+.project-hero .chip .n { color: var(--faint); font-weight: 500; }
+.project-groups { margin-top: 8px; }
+.project-groups .type-group { margin-bottom: 30px; }
+.project-groups .type-group h2 { display: flex; gap: 10px; align-items: baseline; margin: 0 0 14px; font-size: 17px; }
+.project-groups .type-group h2 .count { color: var(--muted); font-size: 12px; font-weight: 500; }
+.project-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 14px; }
+.project-card { display: block; background: var(--card); border: 1px solid var(--border-soft); border-radius: 14px; padding: 14px 16px; box-shadow: var(--shadow); }
+.project-card:hover { border-color: var(--accent); }
+.project-card h3 { margin: 0 0 6px; font-size: 14px; line-height: 1.4; }
+.project-card h3 a { color: var(--text); text-decoration: none; }
+.project-card h3 a:hover { color: var(--accent); }
+.project-card .meta { margin: 0; color: var(--muted); font-size: 12px; }
+.project-card .summary { margin: 6px 0 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
+.project-card.archived { opacity: 0.75; background: var(--card-2, var(--card)); }
+.project-historical { margin-top: 10px; padding-top: 18px; border-top: 1px dashed var(--border); }
+.project-historical summary { cursor: pointer; color: var(--muted); font-size: 13px; font-weight: 600; }
+.project-historical .project-cards { margin-top: 14px; }
+
 .section-title { margin: 30px 0 14px; font-size: 17px; font-weight: 700; }
 
 .cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }

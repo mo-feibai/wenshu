@@ -1,10 +1,101 @@
 ---
-import Layout from '../layouts/Base.astro';
-const { project } = Astro.params;
+import { getCollection } from 'astro:content';
+import Base from '../../layouts/Base.astro';
+import { fmtDate } from '../../lib/helpers';
+
+export async function getStaticPaths() {
+  const entries = await getCollection('docs');
+  const projects = [...new Set(entries.map((e) => e.data.project).filter(Boolean))];
+  return projects.map((project) => ({
+    params: { project: String(project) },
+    props: { project: String(project) },
+  }));
+}
+
+const { project } = Astro.props;
+const q = (Astro.url.searchParams.get('type') || 'all').toLowerCase();
+const entries = (await getCollection('docs')).filter((e) => e.data.project === project);
+
+const docs = entries.map((e) => ({
+  id: e.id,
+  url: `/docs/${e.id}/`,
+  title: e.data.title || e.id,
+  topic: e.data.topic || '',
+  type: (e.data.type || 'other').toString(),
+  status: e.data.status || '',
+  date: e.data.date ? fmtDate(e.data.date) : '',
+  summary: e.data.summary || '',
+  supersededBy: e.data.superseded_by ?? null,
+}));
+
+const byType: Record<string, typeof docs> = {};
+for (const d of docs) {
+  byType[d.type] = byType[d.type] || [];
+  byType[d.type].push(d);
+}
+const isCurrent = (d: (typeof docs)[number]) => d.status !== 'archived' && !d.supersededBy;
+const stats = {
+  total: docs.length,
+  cur: docs.filter(isCurrent).length,
+  hist: docs.filter((d) => !isCurrent(d)).length,
+};
+const types = Object.keys(byType).sort();
+const showType = q === 'all' ? null : q;
+const groups = (showType ? [showType] : types)
+  .map((t) => ({
+    type: t,
+    list: (byType[t] || []).filter(isCurrent).sort((a, b) => b.date.localeCompare(a.date)),
+  }))
+  .filter((g) => g.list.length > 0);
+const historical = docs.filter((d) => !isCurrent(d));
 ---
-<Layout title={`${project} · 项目`}>
-<main class="project-page">
+<Base title={`${project} · 项目`}>
+<section class="project-hero">
   <h1>{project}</h1>
-  <p>项目维度文档列表 · 按类型过滤与分享功能已就绪</p>
-</main>
-</Layout>
+  <div class="project-stats">
+    <span>文档 <b>{stats.total}</b></span>
+    <span>当前版 <b>{stats.cur}</b></span>
+    <span>历史版 <b>{stats.hist}</b></span>
+  </div>
+  {types.length > 1 && (
+    <div class="type-filter">
+      <a href="?type=all" class={showType === null ? 'chip active' : 'chip'}>全部</a>
+      {types.map((t) => <a href={`?type=${encodeURIComponent(t)}`} class={showType === t ? 'chip active' : 'chip'}>{t} <span class="n">{(byType[t] || []).filter(isCurrent).length}</span></a>)}
+    </div>
+  )}
+</section>
+
+<section class="project-groups">
+  {groups.map((g) => (
+    <div class="type-group" id={`type-${g.type}`}>
+      <h2>{g.type} <span class="count">{g.list.length} 篇</span></h2>
+      <div class="project-cards">
+        {g.list.map((d) => (
+          <article class="project-card">
+            <h3><a href={d.url}>{d.title}</a></h3>
+            <p class="meta">{d.topic}{d.date ? ` · ${d.date}` : ''}</p>
+            {d.summary && <p class="summary">{d.summary}</p>}
+          </article>
+        ))}
+      </div>
+    </div>
+  ))}
+  {groups.length === 0 && <p class="empty">该筛选下暂无可访问文档</p>}
+</section>
+
+{historical.length > 0 && (
+  <section class="project-historical">
+    <details>
+      <summary>历史版本（已被替代 / 已归档 {historical.length} 篇）</summary>
+      <div class="project-cards">
+        {historical.map((d) => (
+          <article class="project-card archived">
+            <h3><a href={d.url}>{d.title}</a></h3>
+            <p class="meta">{d.topic}{d.date ? ` · ${d.date}` : ''} · 已归档</p>
+          </article>
+        ))}
+      </div>
+    </details>
+  </section>
+)}
+</Base>

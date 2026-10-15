@@ -93,6 +93,10 @@ const totalPending = entries.filter((e) => e.data.status === 'pending').length;
                 </svg>
               </button>
               <div class="side-topics">
+                <a class="side-topic side-project-home" href={`/projects/${encodeURIComponent(p.name)}/`}>
+                  <span>项目总览</span>
+                  <span class="count">{p.count}</span>
+                </a>
                 {p.topics.map((t) => (
                   <a
                     class={`side-topic ${t.name === activeTopic ? 'active' : ''}`}
