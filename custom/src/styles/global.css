@@ -326,6 +326,26 @@ html.module-mode .search-wrap { display: block; }
 .shares-table th:last-child, .shares-table td:last-child { white-space: nowrap; text-align: right; }
 .shares-table td:last-child .copy-btn + .copy-btn { margin-left: 6px; }
 .copy-btn.danger { color: #f87171; border-color: color-mix(in srgb, #f87171 40%, transparent); }
+
+/* 状态切换（文档页右栏 + 待办看板行内） */
+.status-switch { margin-bottom: 4px; }
+.status-btns { display: flex; flex-wrap: wrap; gap: 6px; }
+.status-loading { color: var(--faint); font-size: 12px; }
+.status-msg { margin: 6px 0 0; font-size: 12px; color: var(--muted); }
+.status-msg.err { color: #f87171; }
+.status-msg.ok { color: var(--accent); }
+/* 行内按钮较宽：表格整体给最小宽度并允许横向滚动，避免主题列被压成竖排 */
+.table-scroll { overflow-x: auto; }
+.pending-table td.row-actions { white-space: nowrap; }
+.pending-table td.row-actions .copy-btn { margin-right: 6px; padding: 3px 8px; font-size: 12px; }
+.pending-table td.row-actions .copy-btn:last-child { margin-right: 0; }
+.pending-table .topic-cell { white-space: nowrap; max-width: 150px; overflow: hidden; text-overflow: ellipsis; }
+/* 标题列可省略，把宽度让给操作列（三个按钮不能被挤出视口） */
+#ptable td:nth-child(3) a, .stale-section td:nth-child(3) a {
+  display: inline-block; max-width: 260px; overflow: hidden;
+  text-overflow: ellipsis; white-space: nowrap; vertical-align: bottom;
+}
+#ptable { min-width: 860px; }
 .copy-btn.danger:hover { background: color-mix(in srgb, #f87171 12%, transparent); }
 
 /* 分享访客：隐藏全站项目树（模块模式由脚本换成模块清单） */

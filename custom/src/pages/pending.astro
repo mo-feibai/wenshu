@@ -17,11 +17,17 @@ const api = active.filter((e) => e.data.type === 'api');
 const targetOf = (t: string) => (t === 'sql' ? 'executed（已执行）' : t === 'api' ? 'implemented（已实现）' : 'final（定稿）');
 const flipInstruction = (e: any) =>
   `请将文枢文档「${e.data.title}」的状态从 pending 改为 ${targetOf(e.data.type)}，文档 ID：${e.id}。完成后重新构建站点。`;
+
+// 行内状态切换：主目标（执行/实现）+ 归档。合法流转最终由服务端 /api/status 校验。
+const nextOf = (t: string) => (t === 'sql' ? 'executed' : t === 'api' ? 'implemented' : 'final');
+const labelOf: Record<string, string> = {
+  executed: '已执行', implemented: '已实现', final: '定稿',
+};
 ---
 <Base>
   <section class="hero">
     <h1>待办看板</h1>
-    <p>未落地前可持续修改；执行 / 实现完成后状态翻转并冻结。</p>
+    <p>未落地前可持续修改；执行 / 实现完成后状态翻转并冻结。行内可直接切换状态（约 15 秒重建）。</p>
   </section>
 
   <div class="chips" id="chips">
@@ -30,6 +36,7 @@ const flipInstruction = (e: any) =>
     <button class="chip" data-kind="api">待实现接口 {api.length}</button>
   </div>
 
+  <div class="table-scroll">
   <table class="pending-table" id="ptable">
     <thead>
       <tr><th>状态</th><th>类型</th><th>标题</th><th>主题</th><th>日期</th><th>操作</th></tr>
@@ -40,35 +47,42 @@ const flipInstruction = (e: any) =>
           <td><StatusBadge status={e.data.status} /></td>
           <td><TypeBadge type={e.data.type} version={e.data.version} /></td>
           <td><a href={docUrl(e.id)}>{e.data.title}</a></td>
-          <td>{e.data.topic}</td>
+          <td class="topic-cell" title={e.data.topic}>{e.data.topic}</td>
           <td class="mono" style="color:var(--muted)">{fmtDate(e.data.date)}</td>
-          <td>
-            <button class="copy-btn" data-label="复制翻转指令" data-copy={flipInstruction(e)}>复制翻转指令</button>
+          <td class="row-actions">
+            <button class="copy-btn" data-status-btn data-id={e.id} data-to={nextOf(e.data.type)} data-title={e.data.title}>标记{labelOf[nextOf(e.data.type)]}</button>
+            <button class="copy-btn danger" data-status-btn data-id={e.id} data-to="archived" data-title={e.data.title}>归档</button>
+            <button class="copy-btn" data-label="复制翻转指令" data-copy={flipInstruction(e)}>复制指令</button>
           </td>
         </tr>
       ))}
       {active.length === 0 && <tr><td colspan="6" style="text-align:center;color:var(--faint)">没有待办 🎉</td></tr>}
     </tbody>
   </table>
+</div>
   {stale.length > 0 && (
     <details class="stale-section" style="margin-top:18px">
       <summary style="cursor:pointer;color:var(--muted);font-size:13px">已过期待办（{stale.length}）</summary>
-      <table class="pending-table" style="margin-top:8px">
+      <div class="table-scroll" style="margin-top:8px">
+      <table class="pending-table">
         <tbody>
           {stale.map((e) => (
-            <tr data-kind={e.data.type}">
+            <tr data-kind={e.data.type}>
               <td><StatusBadge status={e.data.status} /></td>
               <td><TypeBadge type={e.data.type} version={e.data.version} /></td>
               <td><a href={docUrl(e.id)}>{e.data.title}</a></td>
-              <td>{e.data.topic}</td>
+              <td class="topic-cell" title={e.data.topic}>{e.data.topic}</td>
               <td class="mono" style="color:var(--muted)">{fmtDate(e.data.date)}</td>
-              <td>
-                <button class="copy-btn" data-label="复制翻转指令" data-copy={flipInstruction(e)}>复制翻转指令</button>
+              <td class="row-actions">
+                <button class="copy-btn" data-status-btn data-id={e.id} data-to={nextOf(e.data.type)} data-title={e.data.title}>标记{labelOf[nextOf(e.data.type)]}</button>
+                <button class="copy-btn danger" data-status-btn data-id={e.id} data-to="archived" data-title={e.data.title}>归档</button>
+                <button class="copy-btn" data-label="复制翻转指令" data-copy={flipInstruction(e)}>复制指令</button>
               </td>
             </tr>
           ))}
         </tbody>
       </table>
+      </div>
     </details>
   )}
 </Base>
@@ -82,6 +96,43 @@ const flipInstruction = (e: any) =>
       document.querySelectorAll('#ptable tbody tr').forEach((tr) => {
         tr.style.display = kind === 'all' || tr.dataset.kind === kind ? '' : 'none';
       });
+    });
+  });
+
+  // 行内状态切换（与服务端 _mutate_status 同一套校验）
+  document.querySelectorAll('[data-status-btn]').forEach((btn) => {
+    btn.addEventListener('click', async () => {
+      const id = btn.dataset.id;
+      const to = btn.dataset.to;
+      const title = btn.dataset.title;
+      const verb = to === 'executed' ? '已执行' : to === 'implemented' ? '已实现' : to === 'final' ? '已定稿' : '已归档';
+      const warn = to === 'archived'
+        ? `确定将「${title}」归档？\n\n归档是单向终态，不能再翻回其它状态；需要恢复只能出新版本。`
+        : `确定将「${title}」标记为「${verb}」？`;
+      if (!confirm(warn)) return;
+      const row = btn.closest('tr');
+      const btns = row.querySelectorAll('button');
+      btns.forEach((b) => { b.disabled = true; b.textContent = '切换中…'; });
+      try {
+        const res = await fetch('/api/status', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id, status: to }),
+        });
+        if (res.status === 401) {
+          location.href = '/login?next=' + encodeURIComponent(location.pathname);
+          return;
+        }
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || '切换失败');
+        row.style.opacity = '.45';
+        btns.forEach((b) => { b.textContent = '已切换 ✓'; });
+        setTimeout(() => location.reload(), 1000);
+      } catch (err) {
+        btns.forEach((b) => { b.disabled = false; });
+        btn.textContent = '失败：' + err.message;
+        setTimeout(() => location.reload(), 3000);
+      }
     });
   });
 </script>

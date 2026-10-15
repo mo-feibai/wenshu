@@ -56,6 +56,9 @@ STATUS_SETS = {
 DEFAULT_STATUS = {"sql": "pending", "api": "pending", "adr": "accepted",
                   "analysis": "draft", "scheme": "draft", "report": "draft", "other": "draft"}
 TYPE_SUBDIR = {"sql": "sql", "api": "api", "adr": "adr"}
+# 状态中文名（与站点 helpers.ts 的 statusText 保持一致，供 /api/status-options 使用）
+STATUS_LABELS = {"pending": "待处理", "executed": "已执行", "implemented": "已实现",
+                 "draft": "草稿", "final": "定稿", "accepted": "已采纳", "archived": "已归档"}
 
 
 class ApiError(Exception):
@@ -580,6 +583,34 @@ def _has_active_share(entry):
         if doc_path_key(item.get("path", "")) == key:
             return True
     return False
+
+
+def _mutate_status(entries, payload):
+    """状态翻转的唯一实现：admin_status（API Key）与 api_status（页面 session）共用。"""
+    doc_id = str(payload.get("id", "")).strip()
+    status = str(payload.get("status", "")).strip()
+    if not doc_id or not status:
+        raise ApiError(400, "id 与 status 必填")
+    entry = find_entry(entries, doc_id)
+    if not entry:
+        raise ApiError(404, "文档不存在: " + doc_id)
+    if str(entry["meta"].get("retired_at") or "").strip():
+        raise ApiError(400, "已淘汰文档只读，请先 restore")
+    dtype = str(entry["meta"].get("type", "other"))
+    allowed = STATUS_SETS.get(dtype, STATUS_SETS["other"])
+    if status not in allowed:
+        raise ApiError(400, f"{dtype} 的状态只能是 {allowed}")
+    old = entry["meta"].get("status")
+    if old == status:
+        return {"id": entry["id"], "status": status, "unchanged": True,
+                "url": doc_url(entry["id"]), "commit_message": "chore: noop status"}
+    # archived 是单向终态：旧版本被新版取代后不应再回到待办被重新实现
+    if old == "archived":
+        raise ApiError(400, "已归档是单向终态，不能翻回其它状态；需要恢复请出新版本")
+    save_entry_fields(entry, {"status": status})
+    _auto_clear_stale(entry)
+    return {"id": entry["id"], "status": status, "previous": old,
+            "url": doc_url(entry["id"]), "commit_message": f"chore: {entry['id']} {old} -> {status}"}
 
 
 def _review_item(e, cls, stage, today):
@@ -1391,30 +1422,22 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return self.admin_write(mutate)
 
     def admin_status(self, payload):
-        def mutate(entries):
-            doc_id = str(payload.get("id", "")).strip()
-            status = str(payload.get("status", "")).strip()
-            if not doc_id or not status:
-                raise ApiError(400, "id 与 status 必填")
-            entry = find_entry(entries, doc_id)
-            if not entry:
-                raise ApiError(404, "文档不存在: " + doc_id)
-            if str(entry["meta"].get("retired_at") or "").strip():
-                raise ApiError(400, "已淘汰文档只读，请先 restore")
-            dtype = str(entry["meta"].get("type", "other"))
-            allowed = STATUS_SETS.get(dtype, STATUS_SETS["other"])
-            if status not in allowed:
-                raise ApiError(400, f"{dtype} 的状态只能是 {allowed}")
-            old = entry["meta"].get("status")
-            if old == status:
-                return {"id": entry["id"], "status": status, "unchanged": True,
-                        "url": doc_url(entry["id"]), "commit_message": "chore: noop status"}
-            save_entry_fields(entry, {"status": status})
-            _auto_clear_stale(entry)
-            return {"id": entry["id"], "status": status, "previous": old,
-                    "url": doc_url(entry["id"]), "commit_message": f"chore: {entry['id']} {old} -> {status}"}
+        return self.admin_write(lambda entries: _mutate_status(entries, payload))
 
-        return self.admin_write(mutate)
+    def api_status(self, payload):
+        """页面用的状态切换入口（session 门禁）。与 admin_status 共用同一 mutate。"""
+        if not self.is_authed():
+            return self.json_response(401, {"error": "未登录"})
+        return self.admin_write(lambda entries: _mutate_status(entries, payload))
+
+    def api_status_options(self, qs):
+        """合法状态集合。页面据此渲染按钮，避免前端硬编码与服务端漂移。"""
+        if not self.is_authed():
+            return self.json_response(401, {"error": "未登录"})
+        dtype = (qs.get("type", ["other"])[0] or "other").strip()
+        allowed = STATUS_SETS.get(dtype, STATUS_SETS["other"])
+        return self.json_response(200, {"type": dtype, "options": allowed,
+                                        "text": {k: STATUS_LABELS.get(k, k) for k in allowed}})
 
     def admin_meta(self, payload):
         def mutate(entries):
@@ -1781,6 +1804,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if path == "/api/admin/review":
                 return self.admin_review(qs)
             return self.json_response(404, {"error": "unknown admin endpoint"})
+        if path == "/api/status-options":
+            return self.api_status_options(qs)
         if path == "/api/review":
             if not self.is_authed():
                 return self.json_response(401, {"error": "未登录"})
@@ -1837,6 +1862,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self.queue_cookie("ws_sid", sid, SESSION_TTL)
                 return self.redirect(nxt)
             return self.login_page(error="密码不正确，请重试")
+        if parsed.path == "/api/status":
+            try:
+                payload = json.loads(body.decode("utf-8"))
+            except Exception:
+                return self.json_response(400, {"error": "请求格式错误"})
+            return self.api_status(payload)
         if parsed.path == "/api/share":
             if not self.is_authed():
                 return self.json_response(401, {"error": "未登录"})

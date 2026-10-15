@@ -183,6 +183,19 @@ const flipCopy = `请将文枢文档「${entry.data.title}」的状态从 pendin
       )}
 
       <div class="actions-block">
+        {!entry.data.retired_at && entry.data.status !== 'archived' && (
+          <div class="status-switch"
+               data-doc-id={entry.id}
+               data-type={entry.data.type}
+               data-status={entry.data.status}
+               data-title={entry.data.title}>
+            <h4 style="margin-top:14px">切换状态</h4>
+            <div class="status-btns" id="status-btns">
+              <span class="status-loading">载入中…</span>
+            </div>
+            <p class="status-msg" id="status-msg" hidden></p>
+          </div>
+        )}
         <h4 style="margin-top:14px">操作</h4>
         <button class="icon-btn" id="share-open" title="创建临时分享链接" aria-label="创建临时分享链接">
           <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
@@ -362,6 +375,75 @@ const flipCopy = `请将文枢文档「${entry.data.title}」的状态从 pendin
           try { document.execCommand('copy'); done(); } catch (_) {}
         }
       });
+    })();
+
+    // ---------- 状态切换 ----------
+    (() => {
+      const box = document.querySelector('.status-switch');
+      if (!box) return;
+      const btns = document.getElementById('status-btns');
+      const msg = document.getElementById('status-msg');
+      const docId = box.dataset.docId;
+      const dtype = box.dataset.type;
+      const cur = box.dataset.status;
+      const title = box.dataset.title || '';
+
+      function say(text, kind) {
+        msg.textContent = text;
+        msg.className = 'status-msg' + (kind ? ' ' + kind : '');
+        msg.hidden = !text;
+      }
+
+      fetch('/api/status-options?type=' + encodeURIComponent(dtype))
+        .then((r) => (r.status === 401 ? Promise.reject(new Error('未登录')) : r.json()))
+        .then((d) => {
+          // 排除当前状态；archived 是单向终态，只在未归档时提供
+          const targets = (d.options || []).filter((s) => s !== cur);
+          if (!targets.length) { btns.innerHTML = '<span class="status-loading">无可切换状态</span>'; return; }
+          btns.innerHTML = '';
+          targets.forEach((s) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            b.className = 'copy-btn status-btn' + (s === 'archived' ? ' danger' : '');
+            b.textContent = (d.text && d.text[s]) || s;
+            b.addEventListener('click', () => flip(s, b));
+            btns.appendChild(b);
+          });
+        })
+        .catch(() => { btns.innerHTML = '<span class="status-loading">登录后可切换状态</span>'; });
+
+      async function flip(target, btn) {
+        const label = btn.textContent;
+        const warn = target === 'archived'
+          ? `确定将「${title}」标记为「${label}」？\n\n归档是单向终态，不能再翻回其它状态；需要恢复只能出新版本。`
+          : `确定将「${title}」的状态从「${cur}」改为「${label}」？`;
+        if (!confirm(warn)) return;
+        say('');
+        btns.querySelectorAll('button').forEach((b) => { b.disabled = true; b.textContent = '切换中…'; });
+        try {
+          const res = await fetch('/api/status', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ id: docId, status: target }),
+          });
+          if (res.status === 401) {
+            location.href = '/login?next=' + encodeURIComponent(location.pathname);
+            return;
+          }
+          const data = await res.json();
+          if (!res.ok) throw new Error(data.error || '切换失败');
+          say('已切换为「' + (data.status || target) + '」，页面即将刷新…', 'ok');
+          btns.querySelectorAll('button').forEach((b) => { b.textContent = '已切换 ✓'; });
+          setTimeout(() => location.reload(), 900);
+        } catch (err) {
+          say(err.message, 'err');
+          btns.innerHTML = '';
+          btns.appendChild(Object.assign(document.createElement('button'), {
+            type: 'button', className: 'copy-btn status-btn', textContent: label,
+          }));
+          btns.firstChild.addEventListener('click', () => flip(target, btns.firstChild));
+        }
+      }
     })();
   </script>
 </Base>
