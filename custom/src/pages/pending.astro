@@ -12,14 +12,14 @@ const pending = entries
 const active = pending.filter((e) => !e.data.stale_at && !e.data.retired_at);
 const stale = pending.filter((e) => e.data.stale_at && !e.data.retired_at);
 const sql = active.filter((e) => e.data.type === 'sql');
-const api = active.filter((e) => e.data.type === 'api');
+const api = active.filter((e) => e.data.type === 'api' || e.data.type === 'openapi');
 
-const targetOf = (t: string) => (t === 'sql' ? 'executed（已执行）' : t === 'api' ? 'implemented（已实现）' : 'final（定稿）');
+const targetOf = (t: string) => (t === 'sql' ? 'executed（已执行）' : t === 'api' || t === 'openapi' ? 'implemented（已实现）' : 'final（定稿）');
 const flipInstruction = (e: any) =>
   `请将文枢文档「${e.data.title}」的状态从 pending 改为 ${targetOf(e.data.type)}，文档 ID：${e.id}。完成后重新构建站点。`;
 
 // 行内状态切换：主目标（执行/实现）+ 归档。合法流转最终由服务端 /api/status 校验。
-const nextOf = (t: string) => (t === 'sql' ? 'executed' : t === 'api' ? 'implemented' : 'final');
+const nextOf = (t: string) => (t === 'sql' ? 'executed' : t === 'api' || t === 'openapi' ? 'implemented' : 'final');
 const labelOf: Record<string, string> = {
   executed: '已执行', implemented: '已实现', final: '定稿',
 };
@@ -43,7 +43,7 @@ const labelOf: Record<string, string> = {
     </thead>
     <tbody>
       {active.map((e) => (
-        <tr data-kind={e.data.type}>
+        <tr data-kind={e.data.type === 'openapi' ? 'api' : e.data.type}>
           <td><StatusBadge status={e.data.status} /></td>
           <td><TypeBadge type={e.data.type} version={e.data.version} /></td>
           <td><a href={docUrl(e.id)}>{e.data.title}</a></td>
@@ -67,7 +67,7 @@ const labelOf: Record<string, string> = {
       <table class="pending-table">
         <tbody>
           {stale.map((e) => (
-            <tr data-kind={e.data.type}>
+            <tr data-kind={e.data.type === 'openapi' ? 'api' : e.data.type}>
               <td><StatusBadge status={e.data.status} /></td>
               <td><TypeBadge type={e.data.type} version={e.data.version} /></td>
               <td><a href={docUrl(e.id)}>{e.data.title}</a></td>

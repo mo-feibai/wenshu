@@ -43,19 +43,20 @@ PUBLIC_PREFIXES = ("/fonts/",)
 PUBLIC_FILES = ("/favicon.svg", "/logo.svg")
 SHARE_ASSET_PREFIXES = ("/fonts/", "/_astro/", "/favicon.svg", "/logo.svg")
 
-DOC_TYPES = ["sql", "api", "adr", "analysis", "scheme", "report", "other"]
+DOC_TYPES = ["sql", "api", "openapi", "adr", "analysis", "scheme", "report", "other"]
 STATUS_SETS = {
     "sql": ["pending", "executed", "archived"],
     "api": ["pending", "implemented", "archived"],
+    "openapi": ["pending", "implemented", "archived"],
     "adr": ["accepted", "archived"],
     "analysis": ["draft", "final", "archived"],
     "scheme": ["draft", "final", "archived"],
     "report": ["draft", "final", "archived"],
     "other": ["draft", "final", "archived"],
 }
-DEFAULT_STATUS = {"sql": "pending", "api": "pending", "adr": "accepted",
+DEFAULT_STATUS = {"sql": "pending", "api": "pending", "openapi": "pending", "adr": "accepted",
                   "analysis": "draft", "scheme": "draft", "report": "draft", "other": "draft"}
-TYPE_SUBDIR = {"sql": "sql", "api": "api", "adr": "adr"}
+TYPE_SUBDIR = {"sql": "sql", "api": "api", "openapi": "api", "adr": "adr"}
 # 状态中文名（与站点 helpers.ts 的 statusText 保持一致，供 /api/status-options 使用）
 STATUS_LABELS = {"pending": "待处理", "executed": "已执行", "implemented": "已实现",
                  "draft": "草稿", "final": "定稿", "accepted": "已采纳", "archived": "已归档"}
@@ -272,8 +273,35 @@ def resolve_ref(entries, ref: str):
 
 
 def doc_url(doc_id: str) -> str:
-    """文档 URL。与前端 helpers.ts 的 docUrl 保持一致：不做小写化，仅逐段编码。"""
+    """文档 URL。优先使用构建产物中的真实路径（Astro 会把 id 变成 slug：小写、去标点），
+    找不到时退回按原 id 逐段编码。两者对同一文档给出同一 URL。"""
+    mapped = _URL_MAP.get(norm_key(doc_id))
+    if mapped:
+        return mapped
     return "/docs/" + "/".join(urllib.parse.quote(seg) for seg in doc_id.split("/")) + "/"
+
+
+def norm_key(s: str) -> str:
+    """规范化比较键：小写 + 只保留字母数字（含 CJK）。
+
+    用于把「文档库里的原始 id」与「Astro 生成的 slug 目录名」对上：
+      API 文档规范（人读 + OpenAPI + curl） → api文档规范人读openapicurl
+      api-文档规范人读--openapi--curl        → api文档规范人读openapicurl
+    """
+    return "".join(ch for ch in str(s).lower() if ch.isalnum())
+
+
+def build_url_map():
+    """扫描 dist/docs 产物，建立 norm_key → 真实站点 URL 的映射。"""
+    root = ROOT / "docs"
+    out = {}
+    if not root.exists():
+        return out
+    for p in root.rglob("index.html"):
+        rel = p.parent.relative_to(root).as_posix()
+        url = "/docs/" + "/".join(urllib.parse.quote(seg) for seg in rel.split("/")) + "/"
+        out[norm_key(rel)] = url
+    return out
 
 
 def doc_path_key(url: str) -> str:
@@ -319,6 +347,7 @@ def remove_entry_fields(entry, keys):
 # ---------------- 模块分享：当前版快照 ----------------
 
 _SNAPSHOT = None              # 不可变快照；读侧无锁，写侧整体替换
+_URL_MAP = build_url_map()    # norm_key(doc_id) -> 站点真实 URL（导入时扫一次，重建后刷新）
 _SHARE_FILE_CACHE = {}        # token -> {"files": set, "at": epoch}
 FILE_CACHE_TTL = 300
 
@@ -348,6 +377,8 @@ def build_snapshot():
     避免每次文档页请求都 O(N) 扫库。
     """
     entries = read_entries()
+    global _URL_MAP
+    _URL_MAP = build_url_map()
     superseded = set()
     for e in entries:
         sp = str(e["meta"].get("supersedes") or "").strip()
@@ -1222,13 +1253,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return self.json_response(200, {"count": len(out), "shares": out})
 
     def api_module_docs(self, qs):
-        """某主题当前版文档清单（主题页「分享本主题」二次确认用，登录即可访问）。"""
+        """主题或项目（可再按类型）当前版文档清单（分享二次确认用，登录即可访问）。"""
         topic = (qs.get("topic", [""])[0] or "").strip()
-        if not topic:
-            return self.json_response(400, {"error": "topic 必填"})
-        entries = snapshot()["modules"].get(topic, [])
+        project = (qs.get("project", [""])[0] or "").strip()
+        dtype = (qs.get("type", [""])[0] or "").strip()
+        snap = snapshot()
+        if topic:
+            entries = list(snap["modules"].get(topic, []))
+        elif project:
+            entries = list(snap["by_project"].get(project, []))
+            if dtype:
+                entries = [e for e in entries
+                           if str(e["meta"].get("type") or "other").strip() == dtype]
+        else:
+            return self.json_response(400, {"error": "topic 或 project 必填"})
         return self.json_response(200, {
-            "topic": topic, "count": len(entries),
+            "topic": topic, "project": project, "type": dtype,
+            "count": len(entries),
             "docs": [{"id": e["id"], "title": str(e["meta"].get("title", "")),
                       "type": str(e["meta"].get("type", "")),
                       "status": str(e["meta"].get("status", "")),
@@ -1356,6 +1397,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             code, _, _ = run_git(["commit", "-m", msg])
             _, commit, _ = run_git(["rev-parse", "--short", "HEAD"])
             invalidate_snapshot()
+            global _URL_MAP
+            _URL_MAP = build_url_map()
+            if isinstance(info, dict) and info.get("id") and "url" in info:
+                info["url"] = doc_url(str(info["id"]))
             info.update({"ok": True, "built": True, "commit": commit if code == 0 else ""})
             return self.json_response(200, info)
 
@@ -1451,7 +1496,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if dtype == "sql":
                 if status != "executed":
                     raise ApiError(400, f"当前 SQL 状态为「{status or '未设置'}」：未执行（pending）的 SQL 请用 wenshu_update 或 wenshu_patch 原地修改，仅已执行（executed）后才出新迁移")
-            elif dtype == "api":
+            elif dtype in ("api", "openapi"):
                 if status != "implemented":
                     raise ApiError(400, f"当前接口文档状态为「{status or '未设置'}」：未实现（pending/draft）请用 wenshu_update 或 wenshu_patch 原地修改，仅已实现（implemented）且改动较大时才升版")
                 if payload.get("major_change") is not True:
@@ -1528,20 +1573,26 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def admin_meta(self, payload):
         def mutate(entries):
-            doc_id = str(payload.get("id", "")).strip()
-            if not doc_id:
-                raise ApiError(400, "id 必填")
-            entry = find_entry(entries, doc_id)
-            if not entry:
-                raise ApiError(404, "文档不存在: " + doc_id)
-            if str(entry["meta"].get("retired_at") or "").strip():
-                raise ApiError(400, "已淘汰文档只读，请先 restore")
+            ids = payload.get("ids")
+            if ids is not None:
+                if not isinstance(ids, list) or not [str(x).strip() for x in ids]:
+                    raise ApiError(400, "ids 必须是非空数组")
+                if payload.get("changes") is not None:
+                    raise ApiError(400, "changes 不支持批量更新")
+                targets = [str(x).strip() for x in ids if str(x).strip()]
+            else:
+                doc_id = str(payload.get("id", "")).strip()
+                if not doc_id:
+                    raise ApiError(400, "id 必填")
+                targets = [doc_id]
             fields = {}
-            for k in ("topic", "domain", "summary", "title"):
+            for k in ("topic", "domain", "summary", "title", "type"):
                 if payload.get(k) is not None:
                     v = str(payload[k]).strip()
                     if not v:
                         raise ApiError(400, f"{k} 不能为空")
+                    if k == "type" and v not in DOC_TYPES:
+                        raise ApiError(400, "type 必须是: " + "/".join(DOC_TYPES))
                     fields[k] = v
             if payload.get("related") is not None:
                 related = payload["related"]
@@ -1555,27 +1606,42 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if changes is not None:
                 if not isinstance(changes, list) or not [c for c in changes if str(c).strip()]:
                     raise ApiError(400, "changes 必须是非空数组")
-                if entry["kind"] != "md":
-                    raise ApiError(400, "changes 仅支持 md 文档")
-                changes = [str(c).strip() for c in changes if str(c).strip()]
             if not fields and changes is None:
-                raise ApiError(400, "没有可更新的字段（topic/domain/summary/related/title/changes）")
-            if changes is not None:
-                meta, rest = parse_md(entry["text"])
-                meta.update(fields)
-                rest = inject_changelog_md(rest.lstrip("\n"), changes)
-                text = render_md(meta, "\n" + rest.lstrip("\n"))
-                entry["path"].write_text(text, encoding="utf-8")
-                entry["text"] = text
-                entry["meta"].update(fields)
-            else:
-                save_entry_fields(entry, fields)
+                raise ApiError(400, "没有可更新的字段（topic/domain/summary/related/title/type/changes）")
+            done = []
+            for doc_id in targets:
+                entry = find_entry(entries, doc_id)
+                if not entry:
+                    raise ApiError(404, "文档不存在: " + doc_id)
+                if str(entry["meta"].get("retired_at") or "").strip():
+                    raise ApiError(400, "已淘汰文档只读，请先 restore")
+                if fields.get("type"):
+                    st = str(entry["meta"].get("status") or "").strip()
+                    if st and st not in STATUS_SETS[fields["type"]]:
+                        raise ApiError(400, f"{doc_id} 当前状态 {st} 不适用于类型 {fields['type']}，请先切换状态")
+                if changes is not None:
+                    if entry["kind"] != "md":
+                        raise ApiError(400, "changes 仅支持 md 文档")
+                    cl = [str(c).strip() for c in changes if str(c).strip()]
+                    meta, rest = parse_md(entry["text"])
+                    meta.update(fields)
+                    rest = inject_changelog_md(rest.lstrip("\n"), cl)
+                    text = render_md(meta, "\n" + rest.lstrip("\n"))
+                    entry["path"].write_text(text, encoding="utf-8")
+                    entry["text"] = text
+                    entry["meta"].update(fields)
+                else:
+                    save_entry_fields(entry, fields)
+                _auto_clear_stale(entry)
+                done.append(entry["id"])
             updated = dict(fields)
             if changes is not None:
-                updated["changes"] = changes
-            _auto_clear_stale(entry)
-            return {"id": entry["id"], "updated": updated, "url": doc_url(entry["id"]),
-                    "commit_message": f"chore: 更新元数据 {entry['id']}"}
+                updated["changes"] = [str(c).strip() for c in changes if str(c).strip()]
+            if len(done) == 1:
+                return {"id": done[0], "updated": updated, "url": doc_url(done[0]),
+                        "commit_message": f"chore: 更新元数据 {done[0]}"}
+            return {"ids": done, "count": len(done), "updated": updated,
+                    "commit_message": f"chore: 批量更新元数据 {len(done)} 篇"}
 
         return self.admin_write(mutate)
 

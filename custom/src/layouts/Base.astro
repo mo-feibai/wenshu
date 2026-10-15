@@ -134,6 +134,10 @@ const totalPending = entries.filter((e) => e.data.status === 'pending').length;
         const m = location.pathname.match(/^\/topics\/([^/]+)\/?$/);
         return m ? decodeURIComponent(m[1]) : '';
       }
+      function moduleProjectOf() {
+        const m = location.pathname.match(/^\/projects\/([^/]+)\/?$/);
+        return m ? decodeURIComponent(m[1]) : '';
+      }
       function decodePath(p) {
         try { return decodeURIComponent(p); } catch { return p; }
       }
@@ -141,7 +145,13 @@ const totalPending = entries.filter((e) => e.data.status === 'pending').length;
         if (!isShareView) return;
         const qs = new URLSearchParams({ path: location.pathname });
         const topic = moduleTopicOf();
+        const proj = moduleProjectOf();
         if (topic) qs.set('topic', topic);
+        if (proj) {
+          qs.set('project', proj);
+          const tp = new URLSearchParams(location.search).get('type');
+          if (tp) qs.set('type', tp);
+        }
         qs.set('path', location.pathname);
         let ctx = null;
         try {
@@ -150,7 +160,7 @@ const totalPending = entries.filter((e) => e.data.status === 'pending').length;
         } catch { ctx = null; }
         if (!ctx) return;
         window.__wsShareScope = { topic: ctx.topic || '', project: ctx.project || '' };
-        if (ctx.scope !== 'module') return;
+        if (ctx.scope !== 'module' && ctx.scope !== 'topic' && ctx.scope !== 'project') return;
         /* 模块模式：保留侧栏与搜索框（内容换成模块清单与模块内搜索） */
         html.classList.add('module-mode');
 
@@ -161,7 +171,7 @@ const totalPending = entries.filter((e) => e.data.status === 'pending').length;
           const head = document.createElement('div');
           head.className = 'side-module-head';
           head.innerHTML = '<span class="side-module-title"></span><span class="side-module-count"></span>';
-          head.querySelector('.side-module-title').textContent = ctx.topic;
+          head.querySelector('.side-module-title').textContent = ctx.topic || ctx.project;
           head.querySelector('.side-module-count').textContent = ctx.docs.length + ' 篇';
           const list = document.createElement('div');
           list.className = 'side-topics module';
@@ -230,6 +240,27 @@ const totalPending = entries.filter((e) => e.data.status === 'pending').length;
             p.textContent = '本模块暂无可访问的文档。';
             hero.appendChild(p);
           }
+        }
+
+        /* 项目落地页：只保留作用域内文档，隐藏历史版本与内部操作入口 */
+        if (proj) {
+          document.querySelectorAll('.module-share, .project-search, .type-filter').forEach((n) => n.remove());
+          const hist = document.querySelector('.project-historical');
+          if (hist) hist.remove();
+          const allowedProject = new Set(ctx.docs.map((d) => decodePath(d.url).replace(/\/$/, '')));
+          document.querySelectorAll('.project-card a[href]').forEach((a) => {
+            const href = decodePath(a.getAttribute('href') || '').replace(/\/$/, '');
+            if (!allowedProject.has(href)) { const c = a.closest('.project-card'); if (c) c.remove(); }
+          });
+          document.querySelectorAll('.type-group').forEach((g) => {
+            if (!g.querySelector('.project-card')) g.remove();
+          });
+          const groups = document.querySelector('.project-groups');
+          if (groups && !groups.querySelector('.project-card')) {
+            groups.innerHTML = '<p class="empty">本模块暂无可访问的文档。</p>';
+          }
+          const stats = document.querySelector('.project-stats');
+          if (stats) stats.innerHTML = `<span>本模块开放 <b>${ctx.docs.length}</b> 篇当前版文档</span>`;
         }
       }
       bootShareScope();

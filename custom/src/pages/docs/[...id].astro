@@ -43,7 +43,7 @@ const rawFile =
     ? sqlKey ? `/files/${sqlKey}` : `/files/${entry.data.title}.sql`
     : mdKey ? `/files/${mdKey}` : undefined);
 
-const targetLabel = entry.data.type === 'sql' ? 'executed（已执行）' : entry.data.type === 'api' ? 'implemented（已实现）' : 'final（定稿）';
+const targetLabel = entry.data.type === 'sql' ? 'executed（已执行）' : entry.data.type === 'api' || entry.data.type === 'openapi' ? 'implemented（已实现）' : 'final（定稿）';
 const flipCopy = `请将文枢文档「${entry.data.title}」的状态从 pending 改为 ${targetLabel}，文档 ID：${entry.id}。完成后重新构建站点。`;
 ---
 <Base>
@@ -57,6 +57,7 @@ const flipCopy = `请将文枢文档「${entry.data.title}」的状态从 pendin
     <article data-pagefind-body{entry.data.retired_at ? ' data-pagefind-ignore' : ''}>
       <span data-pagefind-meta="topic" hidden>{entry.data.topic}</span>
       <span data-pagefind-meta="project" hidden>{entry.data.project}</span>
+      <span data-pagefind-filter="project" hidden>{entry.data.project}</span>
       <span data-pagefind-meta="status" hidden>{entry.data.status}</span>
       <span data-pagefind-meta="type" hidden>{entry.data.type}</span>
       <header class="doc-head">

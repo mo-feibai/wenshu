@@ -259,8 +259,8 @@ mark.search-hit.current {
    因此这些隐藏规则只对「非模块」的分享生效。 */
 html.shared:not(.module-mode) .sidebar { display: none; }
 html.shared:not(.module-mode) .shell { grid-template-columns: 1fr; }
-html.shared:not(.module-mode) .search-wrap,
-html.shared:not(.module-mode) .pending-chip { display: none; }
+html.shared:not(.module-mode) .search-wrap { display: none; }
+html.shared .pending-chip { display: none; }
 .shared #flip-btn, .shared .version-block, .shared .actions-block { display: none; }
 /* 模块分享：related 区块由脚本按模块范围过滤后整体隐藏；单篇分享沿用整体隐藏 */
 .shared:not(.module-mode) .related-block { display: none; }
@@ -400,6 +400,24 @@ html.shared .side-project { display: none; }
 .project-historical { margin-top: 10px; padding-top: 18px; border-top: 1px dashed var(--border); }
 .project-historical summary { cursor: pointer; color: var(--muted); font-size: 13px; font-weight: 600; }
 .project-historical .project-cards { margin-top: 14px; }
+
+/* 项目页：内搜索 + 工具条（类型过滤 / 分享） */
+.project-search { position: relative; margin-top: 14px; max-width: 460px; }
+.project-search input {
+  width: 100%; height: 36px; padding: 0 14px;
+  background: var(--card); color: var(--text);
+  border: 1px solid var(--border); border-radius: 10px;
+  outline: none; font-size: 13px; font-family: inherit;
+}
+.project-search input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-soft); }
+.project-search .search-results { top: 42px; }
+.project-tools { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-top: 14px; }
+.project-tools .type-filter { margin-top: 0; }
+.project-tools .module-share { margin-top: 0; }
+.project-hero .type-filter .chip { cursor: pointer; }
+.project-hero .type-filter .chip.active { color: var(--accent); border-color: var(--accent); background: var(--accent-soft); }
+a.project-card { color: inherit; text-decoration: none; }
+a.project-card h3 { color: var(--text); }
 
 .section-title { margin: 30px 0 14px; font-size: 17px; font-weight: 700; }
 

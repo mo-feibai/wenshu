@@ -9,7 +9,7 @@ export const collections = {
       project: z.string(),
       domain: z.string().optional(),
       topic: z.string(),
-      type: z.enum(['sql', 'api', 'adr', 'analysis', 'scheme', 'report', 'other']),
+      type: z.enum(['sql', 'api', 'openapi', 'adr', 'analysis', 'scheme', 'report', 'other']),
       status: z.enum(['pending', 'executed', 'implemented', 'draft', 'final', 'accepted', 'archived']),
       version: z.number().optional(),
       date: z.coerce.date(),

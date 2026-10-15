@@ -112,17 +112,17 @@ const tools = {
   wenshu_create: tool({
     id: "wenshu_create",
     description:
-      "文枢：新建文档。sql 类型自动命名 迁移-YYYYMMDD-<topic>.sql 并写入 -- @meta（可用 filename 覆盖文件名）；api/其他类型写入 <title>.md 的 frontmatter。写库后服务自动重建站点并 git 提交。related 必须引用已存在的文档 id（先用 wenshu_context 查询）。",
+      "文枢：新建文档。sql 类型自动命名 迁移-YYYYMMDD-<topic>.sql 并写入 -- @meta（可用 filename 覆盖文件名）；api/openapi/其他类型写入 <title>.md 的 frontmatter（api=人读接口文档，openapi=OpenAPI 规格，两者配对使用）。写库后服务自动重建站点并 git 提交。related 必须引用已存在的文档 id（先用 wenshu_context 查询）。",
     args: {
       project: tool.schema.string().describe("项目名，如 xingtai-smart-store-api"),
       topic: tool.schema.string().describe("主题（功能主题，如 订餐支付）"),
       type: tool.schema
-        .enum(["sql", "api", "adr", "analysis", "scheme", "report", "other"])
-        .describe("文档类型"),
-      title: tool.schema.string().describe("标题（sql 类型用于命名提示，api 类型即文件名）"),
+        .enum(["sql", "api", "openapi", "adr", "analysis", "scheme", "report", "other"])
+        .describe("文档类型：api=人读接口文档，openapi=OpenAPI 规格"),
+      title: tool.schema.string().describe("标题（sql 类型用于命名提示，api/openapi 类型即文件名，OpenAPI 规格以 -OpenAPI 结尾）"),
       content: tool.schema.string().describe("正文：sql 为原始 SQL 脚本；其他为 Markdown 正文（不含 frontmatter）"),
       domain: tool.schema.string().optional().describe("领域/子目录，如 餐厅（可省略）"),
-      status: tool.schema.string().optional().describe("初始状态：sql[pending|executed] api[pending|implemented] 等"),
+      status: tool.schema.string().optional().describe("初始状态：sql[pending|executed] api/openapi[pending|implemented] 等"),
       related: tool.schema.array(tool.schema.string()).optional().describe("关联文档 id 数组"),
       summary: tool.schema.string().optional().describe("一句话摘要"),
       date: tool.schema.string().optional().describe("日期 YYYY-MM-DD（默认今天）"),
@@ -139,7 +139,7 @@ const tools = {
   wenshu_new_version: tool({
     id: "wenshu_new_version",
     description:
-      "文枢：为已有文档出新版本（严格门槛，服务端强制）。API：必须当前 status=implemented，且显式传 major_change=true 并填写 changes（仅新增/删除接口、契约实质变化、大范围改写）。SQL：必须当前 status=executed（未执行的 SQL 请用 wenshu_update 原地改）。未实现/未执行的文档调用会被服务端拒绝——改未完成内容用 wenshu_update，改措辞/示例用 wenshu_patch。API 升版生成 vN+1（全量快照）并自动归档旧版；SQL 追加新迁移文件并默认关联旧脚本。changes 一条一个改动点（前端据此知道要改哪些接口）；服务端自动注入「本版变更」（SQL 为 -- 注释），content 里不要重复写。",
+      "文枢：为已有文档出新版本（严格门槛，服务端强制）。接口类（api/openapi）：必须当前 status=implemented，且显式传 major_change=true 并填写 changes（仅新增/删除接口、契约实质变化、大范围改写）。SQL：必须当前 status=executed（未执行的 SQL 请用 wenshu_update 原地改）。未实现/未执行的文档调用会被服务端拒绝——改未完成内容用 wenshu_update，改措辞/示例用 wenshu_patch。接口升版生成 vN+1（全量快照）并自动归档旧版；SQL 追加新迁移文件并默认关联旧脚本。changes 一条一个改动点（前端据此知道要改哪些接口）；服务端自动注入「本版变更」（SQL 为 -- 注释），content 里不要重复写。",
     args: {
       id: tool.schema.string().describe("被版本化的文档 id"),
       changes: tool.schema
@@ -197,7 +197,7 @@ const tools = {
   wenshu_set_status: tool({
     id: "wenshu_set_status",
     description:
-      "文枢：翻转文档状态。SQL: pending→executed；接口: pending→implemented；ADR: accepted；过程文档: draft→final；均可 →archived。注意：必须先获得用户确认再调用（尤其 executed/implemented）。",
+      "文枢：翻转文档状态。SQL: pending→executed；接口（api/openapi）: pending→implemented；ADR: accepted；过程文档: draft→final；均可 →archived。归档（archived）是单向终态，不可回退。注意：必须先获得用户确认再调用（尤其 executed/implemented）。",
     args: {
       id: tool.schema.string().describe("文档 id"),
       status: tool.schema.string().describe("目标状态：executed / implemented / accepted / final / archived / pending / draft"),

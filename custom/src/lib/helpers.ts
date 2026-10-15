@@ -11,6 +11,7 @@ export const statusText = {
 export const typeText = {
   sql: 'SQL',
   api: 'API',
+  openapi: 'OpenAPI',
   adr: 'ADR',
   analysis: '分析',
   scheme: '方案',

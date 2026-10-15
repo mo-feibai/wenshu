@@ -13,7 +13,6 @@ export async function getStaticPaths() {
 }
 
 const { project } = Astro.props;
-const q = (Astro.url.searchParams.get('type') || 'all').toLowerCase();
 const entries = (await getCollection('docs')).filter((e) => e.data.project === project);
 
 const docs = entries.map((e) => ({
@@ -40,8 +39,7 @@ const stats = {
   hist: docs.filter((d) => !isCurrent(d)).length,
 };
 const types = Object.keys(byType).sort();
-const showType = q === 'all' ? null : q;
-const groups = (showType ? [showType] : types)
+const groups = types
   .map((t) => ({
     type: t,
     list: (byType[t] || []).filter(isCurrent).sort((a, b) => b.date.localeCompare(a.date)),
@@ -49,7 +47,7 @@ const groups = (showType ? [showType] : types)
   .filter((g) => g.list.length > 0);
 const historical = docs.filter((d) => !isCurrent(d));
 ---
-<Base title={`${project} · 项目`}>
+<Base>
 <section class="project-hero">
   <h1>{project}</h1>
   <div class="project-stats">
@@ -57,13 +55,52 @@ const historical = docs.filter((d) => !isCurrent(d));
     <span>当前版 <b>{stats.cur}</b></span>
     <span>历史版 <b>{stats.hist}</b></span>
   </div>
+  <div class="project-search">
+    <input id="pq" type="search" placeholder="在本项目内搜索" autocomplete="off" />
+    <div id="pq-results" class="search-results" hidden></div>
+  </div>
   {types.length > 1 && (
-    <div class="type-filter">
-      <a href="?type=all" class={showType === null ? 'chip active' : 'chip'}>全部</a>
-      {types.map((t) => <a href={`?type=${encodeURIComponent(t)}`} class={showType === t ? 'chip active' : 'chip'}>{t} <span class="n">{(byType[t] || []).filter(isCurrent).length}</span></a>)}
+    <div class="project-tools">
+      <div class="type-filter" id="type-filter">
+        <button type="button" class="chip active" data-type="all">全部</button>
+        {types.map((t) => (
+          <button type="button" class="chip" data-type={t}>
+            {t} <span class="n">{(byType[t] || []).filter(isCurrent).length}</span>
+          </button>
+        ))}
+      </div>
+      <div class="module-share">
+        <button class="copy-btn" id="pshare-open">分享本项目</button>
+      </div>
     </div>
   )}
 </section>
+
+<div class="share-modal" id="pshare-modal" hidden>
+  <div class="share-card">
+    <h3>分享项目文档</h3>
+    <p class="hint">访客将看到<b>当前筛选</b>下的全部<b>当前版</b>文档，并可在范围内全文搜索；历史版本、已归档与已淘汰文档不开放。链接无需密码，到期自动失效。</p>
+    <div class="mshare-list" id="pshare-list">加载中…</div>
+    <label class="field">到期时间
+      <input type="datetime-local" id="pshare-expiry" />
+    </label>
+    <div class="share-quick" id="pshare-quick">
+      <button type="button" class="quick-btn" data-days="1">1 天</button>
+      <button type="button" class="quick-btn" data-days="7" data-active="1">7 天</button>
+      <button type="button" class="quick-btn" data-days="30">30 天</button>
+      <button type="button" class="quick-btn" data-days="3650">永久</button>
+    </div>
+    <div class="actions">
+      <button class="copy-btn" id="pshare-create">创建链接</button>
+      <button class="copy-btn" id="pshare-cancel">取消</button>
+    </div>
+    <div class="share-result" id="pshare-result" hidden>
+      <input type="text" id="pshare-url" readonly />
+      <button class="copy-btn" id="pshare-copy">复制</button>
+    </div>
+    <div class="share-error" id="pshare-error" hidden></div>
+  </div>
+</div>
 
 <section class="project-groups">
   {groups.map((g) => (
@@ -98,4 +135,164 @@ const historical = docs.filter((d) => !isCurrent(d));
     </details>
   </section>
 )}
+
+<script is:inline define:vars={{ projectName: project }}>
+  (() => {
+    const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+    /* ---------- 类型过滤（客户端执行：静态页构建期看不到 query） ---------- */
+    const filter = document.getElementById('type-filter');
+    let curType = (new URLSearchParams(location.search).get('type') || 'all').toLowerCase();
+    const applyFilter = (t) => {
+      curType = t;
+      document.querySelectorAll('.project-groups .type-group').forEach((g) => {
+        g.style.display = (t === 'all' || g.id === 'type-' + t) ? '' : 'none';
+      });
+      if (filter) {
+        filter.querySelectorAll('.chip').forEach((c) => {
+          c.classList.toggle('active', (c.dataset.type || 'all') === t);
+        });
+      }
+      const btn = document.getElementById('pshare-open');
+      if (btn) btn.textContent = t === 'all' ? '分享本项目' : `分享当前筛选（${t}）`;
+    };
+    applyFilter(curType);
+    if (filter) {
+      filter.querySelectorAll('.chip').forEach((c) => {
+        c.addEventListener('click', () => {
+          const t = c.dataset.type || 'all';
+          const u = new URL(location.href);
+          if (t === 'all') u.searchParams.delete('type'); else u.searchParams.set('type', t);
+          history.replaceState(null, '', u);
+          applyFilter(t);
+        });
+      });
+    }
+
+    /* ---------- 项目内搜索（Pagefind，按 project 过滤） ---------- */
+    const pq = document.getElementById('pq');
+    const pbox = document.getElementById('pq-results');
+    if (pq && pbox) {
+      let engine = null;
+      const debounce = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTimeout(() => fn(...a), ms); }; };
+      const statusText = { pending: '待处理', executed: '已执行', implemented: '已实现', draft: '草稿', final: '定稿', accepted: '已采纳', archived: '已归档' };
+      pq.addEventListener('input', debounce(async () => {
+        const q = pq.value.trim();
+        if (!q) { pbox.hidden = true; pbox.innerHTML = ''; return; }
+        try {
+          if (!engine) engine = await import('/pagefind/pagefind.js');
+          const search = await engine.search(q, { filters: { project: [projectName] } });
+          const top = search.results.slice(0, 8);
+          const data = await Promise.all(top.map((r) => r.data()));
+          pbox.innerHTML = data.length
+            ? data.map((d) => `<a href="${d.url}?q=${encodeURIComponent(q)}"><b>${esc((d.meta && d.meta.title) || q)}</b><span>${esc([d.meta && d.meta.type && d.meta.type.toUpperCase(), d.meta && statusText[d.meta.status]].filter(Boolean).join(' · '))}</span>${d.excerpt ? `<div class="excerpt">${d.excerpt}</div>` : ''}</a>`).join('')
+            : '<div class="empty">本项目内无结果</div>';
+          pbox.hidden = false;
+        } catch { pbox.hidden = true; }
+      }, 160));
+      pq.addEventListener('keydown', (e) => {
+        if (e.key !== 'Enter') return;
+        const first = pbox.querySelector('a');
+        if (first) { e.preventDefault(); location.href = first.getAttribute('href'); }
+      });
+      document.addEventListener('click', (e) => {
+        if (!e.target.closest('.project-search')) pbox.hidden = true;
+      });
+    }
+
+    /* ---------- 分享当前筛选 ---------- */
+    const openBtn = document.getElementById('pshare-open');
+    const modal = document.getElementById('pshare-modal');
+    if (openBtn && modal) {
+      const listEl = document.getElementById('pshare-list');
+      const expiry = document.getElementById('pshare-expiry');
+      const quick = document.getElementById('pshare-quick');
+      const createBtn = document.getElementById('pshare-create');
+      const cancelBtn = document.getElementById('pshare-cancel');
+      const resultEl = document.getElementById('pshare-result');
+      const urlEl = document.getElementById('pshare-url');
+      const copyBtn = document.getElementById('pshare-copy');
+      const errEl = document.getElementById('pshare-error');
+
+      const setDays = (d) => {
+        const dt = new Date(Date.now() + d * 86400000);
+        dt.setSeconds(0, 0);
+        expiry.value = `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}T${String(dt.getHours()).padStart(2, '0')}:${String(dt.getMinutes()).padStart(2, '0')}`;
+        quick.querySelectorAll('.quick-btn').forEach((b) => b.removeAttribute('data-active'));
+        const hit = quick.querySelector(`[data-days="${d}"]`);
+        if (hit) hit.setAttribute('data-active', '1');
+      };
+      setDays(7);
+      quick.querySelectorAll('.quick-btn').forEach((b) =>
+        b.addEventListener('click', () => setDays(Number(b.dataset.days))));
+      expiry.addEventListener('change', () =>
+        quick.querySelectorAll('.quick-btn').forEach((b) => b.removeAttribute('data-active')));
+
+      let loadedKey = '';
+      openBtn.addEventListener('click', async () => {
+        modal.hidden = false;
+        if (loadedKey === curType) return;
+        listEl.textContent = '加载中…';
+        createBtn.disabled = true;
+        resultEl.hidden = true;
+        errEl.hidden = true;
+        try {
+          const qs2 = new URLSearchParams({ project: projectName });
+          if (curType && curType !== 'all') qs2.set('type', curType);
+          const r = await fetch('/api/module-docs?' + qs2);
+          if (r.status === 401) { modal.hidden = true; location.href = '/login?next=' + encodeURIComponent(location.pathname + location.search); return; }
+          const d = await r.json();
+          loadedKey = curType;
+          if (!d.docs || !d.docs.length) {
+            listEl.innerHTML = '<span class="muted">该筛选下没有可分享的当前版文档。</span>';
+            createBtn.disabled = true;
+            return;
+          }
+          listEl.innerHTML =
+            `<div class="muted">将开放 ${d.count} 篇当前版文档（含未实现的 pending 文档）：</div>` +
+            d.docs.map((x) => `<div class="mshare-item"><span>${esc(x.title)}</span><span class="mshare-tag">${esc((x.type || '').toUpperCase())} · ${esc(x.status)}</span></div>`).join('');
+          createBtn.disabled = false;
+        } catch {
+          listEl.innerHTML = '<span class="muted">清单加载失败，请重试。</span>';
+          createBtn.disabled = true;
+        }
+      });
+      cancelBtn.addEventListener('click', () => { modal.hidden = true; });
+
+      createBtn.addEventListener('click', async () => {
+        errEl.hidden = true;
+        createBtn.disabled = true;
+        createBtn.textContent = '创建中…';
+        try {
+          const body = { scope: 'module', project: projectName, expires: expiry.value };
+          if (curType && curType !== 'all') body.type = curType;
+          const r = await fetch('/api/share', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body),
+          });
+          const d = await r.json();
+          if (!r.ok) throw new Error(d.error || '创建失败');
+          urlEl.value = d.url;
+          resultEl.hidden = false;
+          listEl.innerHTML = `<span class="muted">已创建，开放 ${d.doc_count} 篇当前版文档。</span>`;
+        } catch (e) {
+          errEl.hidden = false;
+          errEl.textContent = e.message || '创建失败';
+        } finally {
+          createBtn.disabled = false;
+          createBtn.textContent = '创建链接';
+        }
+      });
+
+      copyBtn.addEventListener('click', async () => {
+        try {
+          await navigator.clipboard.writeText(urlEl.value);
+          copyBtn.textContent = '已复制 ✓';
+          setTimeout(() => (copyBtn.textContent = '复制'), 1500);
+        } catch {}
+      });
+    }
+  })();
+</script>
 </Base>

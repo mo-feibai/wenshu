@@ -13,7 +13,7 @@ const sorted = [...entries].sort(
 
 const total = entries.length;
 const pendingSql = entries.filter((e) => e.data.type === 'sql' && e.data.status === 'pending').length;
-const pendingApi = entries.filter((e) => e.data.type === 'api' && e.data.status === 'pending').length;
+const pendingApi = entries.filter((e) => (e.data.type === 'api' || e.data.type === 'openapi') && e.data.status === 'pending').length;
 const pendingAll = entries.filter((e) => e.data.status === 'pending').length;
 
 const projectMap = new Map<string, { count: number; pending: number; latest: Date; topics: number }>();
@@ -51,7 +51,7 @@ const recent = sorted.filter((e) => !e.data.retired_at).slice(0, 9);
   <h2 class="section-title">项目</h2>
   <section class="grid">
     {[...projectMap.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([name, p]) => (
-      <div class="project-card">
+      <a class="project-card" href={`/projects/${encodeURIComponent(name)}/`}>
         <h3>{name}</h3>
         <div class="meta">
           <span>{p.count} 篇文档</span>
@@ -59,7 +59,7 @@ const recent = sorted.filter((e) => !e.data.retired_at).slice(0, 9);
           {p.pending > 0 ? <span style="color:var(--amber)">{p.pending} 个待办</span> : <span style="color:var(--green)">无待办</span>}
           <span>最近 {fmtDate(p.latest)}</span>
         </div>
-      </div>
+      </a>
     ))}
   </section>
 
