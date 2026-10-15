@@ -355,15 +355,27 @@ def build_snapshot():
             superseded.add(sp)
     by_url = {}
     modules = {}
+    by_project = {}
+    kinds = {}
     for e in entries:
         by_url[doc_path_key(doc_url(e["id"]))] = e
         topic = str(e["meta"].get("topic") or "").strip()
-        if not topic or not _entry_is_current(e, superseded):
+        project = str(e["meta"].get("project") or "").strip()
+        dtype = str(e["meta"].get("type") or "other").strip() or "other"
+        if dtype not in STATUS_SETS:
+            dtype = "other"
+        if project:
+            kinds.setdefault(project, {}).setdefault(dtype, 0)
+            kinds[project][dtype] += 1
+        if not _entry_is_current(e, superseded):
             continue
-        modules.setdefault(topic, []).append(e)
-    for lst in modules.values():
+        if topic:
+            modules.setdefault(topic, []).append(e)
+        if project:
+            by_project.setdefault(project, []).append(e)
+    for lst in list(modules.values()) + list(by_project.values()):
         lst.sort(key=lambda x: (str(x["meta"].get("date") or ""), x["id"]), reverse=True)
-    return {"by_url": by_url, "modules": modules}
+    return {"by_url": by_url, "modules": modules, "by_project": by_project, "kinds": kinds}
 
 
 def snapshot():
@@ -386,30 +398,87 @@ def invalidate_snapshot():
 def module_scope(item):
     """分享记录 → 规范化 scope；单篇分享返回 None。
 
-    scope 形如 {"topic": "助农", "projects": {"xingtai"} | None}；
+    scope 为多维模型，形如：
+      {"kind": "topic",    "topic": "助农", "projects": {...} | None}
+      {"kind": "project",  "project": "xingtai", "type": "sql" | None}
+    只允许这两种 module 组合（project-type 是 project 的特化）。
     projects 为空表示该 topic 名下的全部项目都包含（与主题页跨项目合并的展示一致）。
     """
     if not item or item.get("scope") != "module":
         return None
     topic = str(item.get("topic") or "").strip()
-    if not topic:
+    if topic:
+        raw = item.get("projects")
+        if isinstance(raw, str):
+            raw = [raw]
+        projs = {str(p).strip() for p in (raw or []) if str(p).strip()}
+        return {"kind": "topic", "topic": topic, "project": "", "type": "",
+                "projects": projs or None}
+    project = str(item.get("project") or "").strip()
+    if not project:
         return None
-    raw = item.get("projects")
-    if isinstance(raw, str):
-        raw = [raw]
-    projs = {str(p).strip() for p in (raw or []) if str(p).strip()}
-    return {"topic": topic, "projects": projs or None}
+    dtype = str(item.get("type") or "").strip()
+    return {"kind": "project", "project": project, "type": dtype, "topic": "", "projects": None}
+
+
+def scope_label(scope):
+    """分享管理页/失效页用的作用域标签。"""
+    if not scope:
+        return ""
+    if scope["kind"] == "topic":
+        return "主题 · " + scope["topic"]
+    if scope["type"]:
+        return f"项目 · {scope['project']} · {scope['type']}"
+    return "项目 · " + scope["project"]
+
+
+def scope_landing(scope):
+    """分享落地页 URL（访客点 /s/<token> 后被重定向到这里）。"""
+    if not scope:
+        return ""
+    if scope["kind"] == "topic":
+        return "/topics/" + urllib.parse.quote(scope["topic"]) + "/?share=1"
+    q = "?share=1" + ("&type=" + urllib.parse.quote(scope["type"]) if scope["type"] else "")
+    return "/projects/" + urllib.parse.quote(scope["project"]) + "/" + q
+
+
+def scope_entries(scope):
+    """作用域覆盖的文档（当前版 + 动态跟随）。"""
+    if not scope:
+        return []
+    snap = snapshot()
+    if scope["kind"] == "topic":
+        lst = snap["modules"].get(scope["topic"], [])
+        if scope["projects"]:
+            lst = [e for e in lst if str(e["meta"].get("project") or "").strip() in scope["projects"]]
+        return lst
+    lst = snap["by_project"].get(scope["project"], [])
+    if scope["type"]:
+        lst = [e for e in lst if str(e["meta"].get("type") or "other").strip() == scope["type"]]
+    return lst
 
 
 def module_entries(item):
-    """模块分享当前覆盖的文档（当前版 + 动态跟随）。"""
-    scope = module_scope(item)
-    if not scope:
-        return []
-    lst = snapshot()["modules"].get(scope["topic"], [])
-    if scope["projects"]:
-        lst = [e for e in lst if str(e["meta"].get("project") or "").strip() in scope["projects"]]
-    return lst
+    """分享记录 → 作用域内当前版文档（兼容旧调用名）。"""
+    return scope_entries(module_scope(item))
+
+
+def scope_matches_entry(scope, entry):
+    """该文档是否落在作用域内（用于文档页鉴权与链接过滤）。"""
+    if not scope or not entry:
+        return False
+    meta = entry["meta"]
+    if scope["kind"] == "topic":
+        if str(meta.get("topic") or "").strip() != scope["topic"]:
+            return False
+        if scope["projects"] and str(meta.get("project") or "").strip() not in scope["projects"]:
+            return False
+        return True
+    if str(meta.get("project") or "").strip() != scope["project"]:
+        return False
+    if scope["type"] and str(meta.get("type") or "other").strip() != scope["type"]:
+        return False
+    return True
 
 
 def share_files(token, item):
@@ -437,7 +506,7 @@ def share_brief(token, item):
     scope = module_scope(item)
     brief = {
         "token": token,
-        "scope": "module" if scope else "doc",
+        "scope": scope["kind"] if scope else "doc",
         "path": item.get("path", ""),
         "expires": item.get("expires", 0),
         "created": item.get("created"),
@@ -445,11 +514,15 @@ def share_brief(token, item):
         "revoked_at": item.get("revoked_at"),
     }
     if scope:
+        brief["kind"] = scope["kind"]
         brief["topic"] = scope["topic"]
-        brief["projects"] = sorted(scope["projects"]) if scope["projects"] else []
+        brief["project"] = scope["project"]
+        brief["type"] = scope["type"]
+        briefs = sorted({str(p) for p in (scope.get("projects") or []) if p})
+        brief["projects"] = briefs
         entries = module_entries(item)
         brief["doc_count"] = len(entries)
-        brief["label"] = f"模块 · {scope['topic']}"
+        brief["label"] = scope_label(scope)
         brief["docs"] = [{"id": e["id"], "title": str(e["meta"].get("title", "")),
                           "type": str(e["meta"].get("type", "")),
                           "status": str(e["meta"].get("status", ""))} for e in entries]
@@ -566,20 +639,17 @@ def _inbound_refs(entries, entry):
 
 
 def _has_active_share(entry):
-    """是否有有效分享引用这篇文档（模块分享按作用域豁免其全部当前版文档）。"""
+    """是否有有效分享引用这篇文档（模块/项目分享按作用域豁免其全部当前版文档）。"""
     key = doc_path_key(doc_url(entry["id"]))
-    topic = str(entry["meta"].get("topic") or "").strip()
-    project = str(entry["meta"].get("project") or "").strip()
     for item in shares.values():
         if not share_valid(item):
             continue
         scope = module_scope(item)
         if scope:
-            if scope["topic"] != topic:
-                continue
-            if scope["projects"] and project not in scope["projects"]:
-                continue
-            return True
+            # B1：主题/项目两种 scope 都要能豁免，交给统一匹配函数
+            if scope_matches_entry(scope, entry):
+                return True
+            continue
         if doc_path_key(item.get("path", "")) == key:
             return True
     return False
@@ -954,10 +1024,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if path.rstrip("/") == target or path.rstrip("/").startswith(target + "/"):
                 return None
             return "该分享不包含此内容"
-        # 模块分享：落地页 + 作用域内的当前版文档
+        # 模块/项目分享：落地页 + 作用域内的当前版文档
         bare = path.split("?")[0].rstrip("/")
-        if bare == "/topics/" + scope["topic"]:
-            return None
+        if scope["kind"] == "topic":
+            if bare == "/topics/" + scope["topic"]:
+                return None
+        else:
+            if bare == "/projects/" + scope["project"]:
+                return None
         entry = snapshot()["by_url"].get(doc_path_key(path))
         if entry and any(e["id"] == entry["id"] for e in module_entries(item)):
             return None
@@ -1038,7 +1112,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         home = "/"
         scope = module_scope(item) if item else None
         if scope:
-            home = "/topics/" + urllib.parse.quote(scope["topic"]) + "/?share=1"
+            home = scope_landing(scope)
         elif item and item.get("path"):
             home = item["path"] + ("&" if "?" in item["path"] else "?") + "share=1"
         nxt = "/login?next=" + urllib.parse.quote(self.path)
@@ -1049,29 +1123,39 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     # ---------- 分享 API（凭 ws_share cookie 鉴权） ----------
     def _pick_share(self, qs):
-        """按客户端给出的上下文定位它所处的那一份分享（多token 时不会认错模块）。"""
+        """按客户端给出的上下文定位它所处的那一份分享（多token 时不会认错作用域）。"""
         grants = self.share_grants()
         if not grants:
             return None, []
         topic = (qs.get("topic", [""])[0] or "").strip()
         project = (qs.get("project", [""])[0] or "").strip()
+        dtype = (qs.get("type", [""])[0] or "").strip()
         path = (qs.get("path", [""])[0] or "").strip()
+        # A2：项目类型分享没有 topic，必须独立成一条匹配分支
+        if project:
+            for item in grants:
+                sc = module_scope(item)
+                if not sc or sc["kind"] != "project" or sc["project"] != project:
+                    continue
+                if dtype and sc["type"] and sc["type"] != dtype:
+                    continue
+                return item, grants
         if topic:
             for item in grants:
-                scope = module_scope(item)
-                if scope and scope["topic"] == topic and (
-                        not project or not scope["projects"] or project in scope["projects"]):
+                sc = module_scope(item)
+                if sc and sc["kind"] == "topic" and sc["topic"] == topic and (
+                        not project or not sc["projects"] or project in sc["projects"]):
                     return item, grants
         key = doc_path_key(path)
         for item in grants:
             if not module_scope(item) and doc_path_key(item.get("path", "")) == key:
                 return item, grants
-        # 模块分享的文档页：按文档反查它属于哪个分享（页面本身不知道自己的主题）
+        # 作用域分享的文档页：按文档反查它属于哪个分享（页面本身不知道自己的主题/项目）
         if path:
             entry = snapshot()["by_url"].get(key)
             if entry:
                 for item in grants:
-                    if any(e["id"] == entry["id"] for e in module_entries(item)):
+                    if scope_matches_entry(module_scope(item), entry):
                         return item, grants
         return None, grants
 
@@ -1087,10 +1171,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 "scope": "doc", "expires": picked.get("expires", 0), "docs": [], "search": True,
                 "topic": str(entry["meta"].get("topic", "")) if entry else "",
                 "project": str(entry["meta"].get("project", "")) if entry else "",
+                "type": str(entry["meta"].get("type", "")) if entry else "",
             })
         entries = module_entries(picked)
         return self.json_response(200, {
-            "scope": "module", "topic": scope["topic"], "expires": picked.get("expires", 0),
+            "scope": scope["kind"], "kind": scope["kind"],
+            "topic": scope["topic"], "project": scope["project"], "type": scope["type"],
+            "label": scope_label(scope),
+            "expires": picked.get("expires", 0),
             "projects": sorted(scope["projects"]) if scope["projects"] else [],
             "search": True,
             "docs": [{"id": e["id"], "title": str(e["meta"].get("title", "")),
@@ -1099,7 +1187,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         })
 
     def api_share_search(self, qs):
-        """模块内全文搜索：实时读文档库源文件做朴素子串匹配（中文无需分词）。"""
+        """分享作用域内全文搜索：实时读文档库源文件做朴素子串匹配（中文无需分词）。"""
         term = (qs.get("q", [""])[0] or "").strip()
         if not term:
             return self.json_response(400, {"error": "缺少搜索词"})
@@ -1108,7 +1196,6 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         picked, grants = self._pick_share(qs)
         if not picked:
             return self.json_response(404, {"error": "当前分享不覆盖此范围", "grants": len(grants)})
-        scope = module_scope(picked)
         scope = module_scope(picked)
         if scope:
             pool = module_entries(picked)
@@ -1161,7 +1248,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             _SHARE_FILE_CACHE.pop(token, None)
             save_shares()
         return self.json_response(200, {"token": token, "revoked": True,
-                                        "scope": module_scope(item)["topic"] if module_scope(item) else "doc"})
+                                        "scope": scope_label(module_scope(item)) or "doc"})
 
     # ---------- Admin API ----------
     def api_auth(self):
@@ -1839,7 +1926,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         scope = module_scope(item)
         if scope:
             # 落地页不带 token：凭证只在入口出现一次，之后靠 cookie 判定
-            return self.redirect("/topics/" + urllib.parse.quote(scope["topic"]) + "/?share=1")
+            return self.redirect(scope_landing(scope))
         target = item["path"]
         if "?" not in target:
             target += "?share=1"
@@ -1888,18 +1975,41 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             snap = snapshot()
             if scope_kind == "module":
                 topic = str(payload.get("topic", "")).strip()
-                if not topic:
-                    return self.json_response(400, {"error": "模块分享需要 topic"})
-                projects = payload.get("projects")
-                if isinstance(projects, str):
-                    projects = [projects]
-                projects = sorted({str(p).strip() for p in (projects or []) if str(p).strip()})
-                covered = [e for e in snap["modules"].get(topic, [])
-                           if not projects or str(e["meta"].get("project") or "").strip() in projects]
-                if not covered:
-                    return self.json_response(400, {"error": f"主题「{topic}」下没有可分享的当前版文档"})
-                record = {"scope": "module", "topic": topic, "projects": projects,
-                          "expires": exp_ts, "created": now_ts(), "files": []}
+                project = str(payload.get("project", "")).strip()
+                dtype = str(payload.get("type", "")).strip()
+                # Q10 白名单：topic 与 project 互斥；type 必须与 project 同时出现
+                if topic and project:
+                    return self.json_response(400, {"error": "topic 与 project 不能同时指定"})
+                if dtype and not project:
+                    return self.json_response(400, {"error": "指定 type 时必须同时指定 project"})
+                if topic:
+                    projects = payload.get("projects")
+                    if isinstance(projects, str):
+                        projects = [projects]
+                    projects = sorted({str(p).strip() for p in (projects or []) if str(p).strip()})
+                    covered = [e for e in snap["modules"].get(topic, [])
+                               if not projects or str(e["meta"].get("project") or "").strip() in projects]
+                    if not covered:
+                        return self.json_response(400, {"error": f"主题「{topic}」下没有可分享的当前版文档"})
+                    record = {"scope": "module", "topic": topic, "projects": projects,
+                              "expires": exp_ts, "created": now_ts(), "files": []}
+                elif project:
+                    if dtype and dtype not in STATUS_SETS:
+                        return self.json_response(400, {"error": f"未知类型: {dtype}"})
+                    covered = snap["by_project"].get(project, [])
+                    if dtype:
+                        covered = [e for e in covered
+                                   if str(e["meta"].get("type") or "other").strip() == dtype]
+                    if not covered:
+                        what = f"项目「{project}」"
+                        if dtype:
+                            what += f" 的 {dtype} 类型"
+                        return self.json_response(400, {"error": f"{what}下没有可分享的当前版文档"})
+                    record = {"scope": "module", "topic": "", "projects": [],
+                              "project": project, "type": dtype,
+                              "expires": exp_ts, "created": now_ts(), "files": []}
+                else:
+                    return self.json_response(400, {"error": "模块分享需要 topic 或 project"})
             else:
                 target = payload.get("path", "")
                 if not isinstance(target, str) or not target.startswith("/docs/"):
@@ -1916,6 +2026,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 "url": f"http://{host}/s/{token}", "expires": payload.get("expires"),
                 "scope": record["scope"], "token": token,
                 "topic": record.get("topic", ""),
+                "project": record.get("project", ""),
+                "type": record.get("type", ""),
                 "doc_count": len(covered) if scope_kind == "module" else 1,
             })
         if parsed.path == "/api/shares/revoke":
