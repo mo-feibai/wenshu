@@ -1,4 +1,4 @@
-import { type Plugin, tool } from "@opencode-ai/plugin"
+import { tool } from "@opencode-ai/plugin"
 import { readFileSync } from "node:fs"
 import { homedir } from "node:os"
 import { join } from "node:path"
@@ -72,7 +72,7 @@ function guardCore(toolName: string, args: Record<string, unknown>): void {
   }
 }
 
-// ---- 工具定义（v1/v2 共用；@opencode-ai/plugin 的 tool() 返回 v2 也接受的 Tool.Info） ----
+// ---- 工具定义：用 @opencode-ai/plugin 的 tool() 生成定义（本机宿主只接受这种已验证形状，改用 schema 构造会被静默拒绝） ----
 
 const tools = {
   wenshu_context: tool({
@@ -112,7 +112,7 @@ const tools = {
   wenshu_create: tool({
     id: "wenshu_create",
     description:
-      "文枢：新建文档。sql 类型自动命名 迁移-YYYYMMDD-<topic>.sql 并写入 -- @meta（可用 filename 覆盖文件名）；api/openapi/其他类型写入 <title>.md 的 frontmatter（api=人读接口文档，openapi=OpenAPI 规格，两者配对使用）。写库后服务自动重建站点并 git 提交。related 必须引用已存在的文档 id（先用 wenshu_context 查询）。",
+      "文枢：新建文档。sql 类型自动命名 迁移-YYYYMMDD-<topic>.sql 并写入 -- @meta（可用 filename 覆盖文件名）；api/openapi/其他类型写入 <title>.md 的 frontmatter（api=人读接口文档，openapi=OpenAPI 规格，两者配对使用）。写库后服务自动重建站点并 git 提交。related 必须引用已存在的文档 id（先用 wenshu_context 查询）。**格式硬要求**：type=api/openapi 必须遵守《API 文档规范（人读 + OpenAPI + curl）》（id=通用规范/文档/API 文档规范（人读 + OpenAPI + curl））——动手前先 wenshu_read 读它、按第二节骨架输出（顶层 ##、逐接口 ###、每接口一个可直接执行的 curl）；服务端会自动补齐缺失的必填小节（占位「（待填写）」，scaffold=false 可关闭），并在返回值 format 里报出缺口（missing/placeholders），收到缺口请立刻补齐。",
     args: {
       project: tool.schema.string().describe("项目名，如 xingtai-smart-store-api"),
       topic: tool.schema.string().describe("主题（功能主题，如 订餐支付）"),
@@ -123,11 +123,12 @@ const tools = {
       content: tool.schema.string().describe("正文：sql 为原始 SQL 脚本；其他为 Markdown 正文（不含 frontmatter）"),
       domain: tool.schema.string().optional().describe("领域/子目录，如 餐厅（可省略）"),
       status: tool.schema.string().optional().describe("初始状态：sql[pending|executed] api/openapi[pending|implemented] 等"),
-      related: tool.schema.array(tool.schema.string()).optional().describe("关联文档 id 数组"),
+      related: tool.schema.array(tool.schema.string()).optional().describe("关联文档 id 数组（api 必须含配套 openapi 文档 id，反之亦然）"),
       summary: tool.schema.string().optional().describe("一句话摘要"),
       date: tool.schema.string().optional().describe("日期 YYYY-MM-DD（默认今天）"),
       version: tool.schema.number().optional().describe("版本号（一般 API 文档用）"),
       filename: tool.schema.string().optional().describe("显式文件名（sql 类型专用，如 迁移-20260914-订餐支付.sql）"),
+      scaffold: tool.schema.boolean().optional().describe("api/openapi 专用：默认 true 自动补齐规范骨架缺失小节；false 关闭（不建议）"),
     },
     async execute(args) {
       const cfg = loadCfg()
@@ -139,7 +140,7 @@ const tools = {
   wenshu_new_version: tool({
     id: "wenshu_new_version",
     description:
-      "文枢：为已有文档出新版本（严格门槛，服务端强制）。接口类（api/openapi）：必须当前 status=implemented，且显式传 major_change=true 并填写 changes（仅新增/删除接口、契约实质变化、大范围改写）。SQL：必须当前 status=executed（未执行的 SQL 请用 wenshu_update 原地改）。未实现/未执行的文档调用会被服务端拒绝——改未完成内容用 wenshu_update，改措辞/示例用 wenshu_patch。接口升版生成 vN+1（全量快照）并自动归档旧版；SQL 追加新迁移文件并默认关联旧脚本。changes 一条一个改动点（前端据此知道要改哪些接口）；服务端自动注入「本版变更」（SQL 为 -- 注释），content 里不要重复写。",
+      "文枢：为已有文档出新版本（严格门槛，服务端强制）。接口类（api/openapi）：必须当前 status=implemented，且显式传 major_change=true 并填写 changes（仅新增/删除接口、契约实质变化、大范围改写）。SQL：必须当前 status=executed（未执行的 SQL 请用 wenshu_update 原地改）。未实现/未执行的文档调用会被服务端拒绝——改未完成内容用 wenshu_update，改措辞/示例用 wenshu_patch。接口升版生成 vN+1（全量快照）并自动归档旧版；SQL 追加新迁移文件并默认关联旧脚本。changes 一条一个改动点（前端据此知道要改哪些接口）；服务端自动注入「本版变更」（SQL 为 -- 注释），content 里不要重复写。**格式硬要求**：api/openapi 新版本必须按《API 文档规范（人读 + OpenAPI + curl）》骨架输出（动手前先 wenshu_read 该规范）；服务端会在返回值 format 报出缺失小节，收到缺口请补齐。",
     args: {
       id: tool.schema.string().describe("被版本化的文档 id"),
       changes: tool.schema
@@ -289,6 +290,28 @@ const tools = {
     },
   }),
 
+  wenshu_lint: tool({
+    id: "wenshu_lint",
+    description:
+      "文枢：API/OpenAPI 文档格式体检（只读）。按《API 文档规范（人读 + OpenAPI + curl）》逐篇检查必填小节（基本信息/调用示例与变量/数据权限与口径/接口清单/逐接口 ###/curl/失败示例/枚举与字典/错误信息总表/口径与边界/部署前置/待确认/related 关联）与「（待填写）」占位，返回缺失清单。回补或交付前用它排队；只报机械可判定项，不评价内容质量。",
+    args: {
+      project: tool.schema.string().optional().describe("只看某个项目，如 plat_jk"),
+      type: tool.schema.string().optional().describe("只看某类型：api / openapi"),
+      id: tool.schema.string().optional().describe("只看某一篇（文档 id）"),
+    },
+    async execute(args) {
+      const cfg = loadCfg()
+      if (!cfg) throw new Error(`文枢配置缺失：请创建 ${CFG_PATH}（baseUrl + apiToken）后重启 opencode`)
+      const qs = new URLSearchParams()
+      for (const k of ["project", "type", "id"] as const) {
+        const v = (args as Record<string, unknown>)[k]
+        if (v) qs.set(k, String(v))
+      }
+      const q = qs.toString()
+      return fmt(await callApi(cfg, "/api/admin/lint" + (q ? `?${q}` : "")))
+    },
+  }),
+
   wenshu_pending: tool({
     id: "wenshu_pending",
     description: "文枢：列出当前所有待办（待执行 SQL / 待实现接口）。",
@@ -301,42 +324,7 @@ const tools = {
   }),
 }
 
-// ---- v1 宿主入口：可调用函数返回 v1 hooks ----
-
-const v1Plugin: Plugin = async ({ client }) => {
-  const cfg = loadCfg()
-  client?.app
-    ?.log?.({
-      body: {
-        service: "wenshu",
-        level: cfg ? "info" : "warn",
-        message: cfg ? "wenshu plugin ready" : `wenshu config missing: ${CFG_PATH}`,
-      },
-    })
-    .catch(() => {})
-
-  return {
-    "tool.execute.before": async (input, output) => {
-      const args = (output?.args ?? {}) as Record<string, unknown>
-      guardCore(input.tool, args)
-    },
-    tool: {
-      wenshu_context: tools.wenshu_context,
-      wenshu_read: tools.wenshu_read,
-      wenshu_create: tools.wenshu_create,
-      wenshu_new_version: tools.wenshu_new_version,
-      wenshu_update: tools.wenshu_update,
-      wenshu_set_status: tools.wenshu_set_status,
-      wenshu_update_meta: tools.wenshu_update_meta,
-      wenshu_patch: tools.wenshu_patch,
-      wenshu_review: tools.wenshu_review,
-      wenshu_retire: tools.wenshu_retire,
-      wenshu_pending: tools.wenshu_pending,
-    },
-  }
-}
-
-// ---- v2 宿主入口：Plugin.define 兼容的 { id, setup(ctx) }（附着在可调用函数上） ----
+// ---- v2 宿主入口：{ id, setup(ctx) } ----
 
 type V2ToolEditor = { add(t: Record<string, unknown>): void }
 type V2HookInput = { tool: string; input: unknown }
@@ -378,9 +366,7 @@ const v2Setup = async (ctx: V2Ctx) => {
   return () => {}
 }
 
-// 复合导出：v2 读 .id/.setup，v1 直接调用函数体
-const WenShuPlugin = { id: "wenshu", server: v1Plugin, setup: v2Setup }
+const WenShuPlugin = { id: "wenshu", setup: v2Setup }
 
 export { WenShuPlugin }
-export { WenShuPlugin as Plugin }
 export default WenShuPlugin

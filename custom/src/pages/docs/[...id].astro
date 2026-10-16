@@ -231,6 +231,10 @@ const flipCopy = `请将文枢文档「${entry.data.title}」的状态从 pendin
         <input type="text" id="share-url" readonly />
         <button class="copy-btn" id="share-copy">复制</button>
       </div>
+      <p class="hint share-tip" id="share-tip" hidden>
+        转发请用上面这条 <b>/s/ 入口链接</b>：凭证只在首次打开它时下发一次。
+        直接复制地址栏里的文档地址（带 <code>?share=1</code>）发给别人会显示「分享链接未激活」。
+      </p>
       <div class="share-error" id="share-error" hidden></div>
     </div>
   </div>
@@ -363,6 +367,8 @@ const flipCopy = `请将文枢文档「${entry.data.title}」的状态从 pendin
           if (!res.ok) throw new Error(data.error || '创建失败');
           urlInput.value = data.url;
           result.hidden = false;
+          const tip = document.getElementById('share-tip');
+          if (tip) tip.hidden = false;
         } catch (err) {
           errorBox.textContent = err.message;
           errorBox.hidden = false;
@@ -378,7 +384,6 @@ const flipCopy = `请将文枢文档「${entry.data.title}」的状态从 pendin
         }
       });
       /* 点遮罩空白处或按 ESC 关闭弹窗（与项目页分享弹窗一致） */
-      modal.addEventListener('click', (e) => { if (e.target === modal) modal.hidden = true; });
       document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape' && !modal.hidden) modal.hidden = true;
       });

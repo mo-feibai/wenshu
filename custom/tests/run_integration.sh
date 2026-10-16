@@ -10,7 +10,9 @@ set -u
 cd "$(dirname "$0")" || exit 1
 
 rc=0
-for t in test_module_share.py test_share_ui.py test_status_ui.py; do
+# test_share_context.py 是纯 mock 单元测试（导入 server.py，不连服务、不写文档库），
+# 先跑它拿下授权匹配逻辑的快速反馈，再跑需要真实重建的端到端用例。
+for t in test_doc_format.py test_share_context.py test_module_share.py test_share_ui.py test_status_ui.py; do
   echo "===== $t ====="
   python3 "$t" || rc=1
 done

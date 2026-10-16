@@ -154,8 +154,25 @@ check("撤销后落地页显示失效说明（非登录跳转）",
       st == 200 and "分享已被撤销" in b, f"{st} {b[:60]}")
 # 注意：失效说明页里含「重新登录站点」链接，所以不能用 b 里有没有 /login 判断是否跳转
 st, h, b = call(opener(), BASE + "/topics/" + urllib.parse.quote(TOPIC) + "/?share=1")
-check("全新访客（无 cookie）仍跳登录页",
+# ?share=1 只是访客视图标志、不是凭证：从未拿到凭证的深链给「分享链接未激活」说明页
+# （跳登录页会让人误以为站点要密码），且绝不泄露内容
+check("全新访客（无 cookie 深链）显示未激活说明页且不泄露内容",
+      st == 200 and "分享链接未激活" in b and "该分享不包含此内容" not in b, f"{st} {b[:50]}")
+# 反向保护：不带 ?share=1 的站点页面对无凭证访客仍跳登录（站点主人要能进站）
+st, h, b = call(opener(), BASE + "/")
+check("全新访客访问站点根仍跳登录页",
       st == 303 and "/login" in h.get("Location", ""), f"{st} {h.get('Location','')}")
+
+print("=== 分享提示元素与接线（防「元素加了但 JS 没接线」） ===")
+# 真实踩过：文档页加了 #share-tip 元素却忘了在创建成功后显示它，提示永远不可见。
+doc_page = docs[0]["url"] if docs else ""
+st, h, b = call(o, BASE + doc_page, "GET")
+check("文档页含转发提示元素", 'id="share-tip"' in b, st)
+check("文档页转发提示已接线（创建成功后由 JS 显示）",
+      "getElementById('share-tip')" in b, doc_page)
+st, h, b = call(o, BASE + "/projects/xingtai-smart-store-api/", "GET")
+check("项目页含转发提示元素", 'id="pshare-tip"' in b, st)
+check("项目页转发提示已接线", "getElementById('pshare-tip')" in b, "")
 
 print()
 print(f"结果: {sum(R)}/{len(R)} 通过")

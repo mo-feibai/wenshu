@@ -920,11 +920,168 @@ def inject_changelog_sql(rest: str, changes) -> str:
     return block + rest.lstrip("\n")
 
 
+# ---------- API/OpenAPI 文档格式：规范骨架检查（lint）与脚手架 ----------
+# 规范原文：`通用规范/文档/API 文档规范（人读 + OpenAPI + curl）`。
+# 这里只做机械可判定的检查（小节是否存在、是否仍是「（待填写）」占位），不判断内容质量。
+API_MD_ORDER = ["基本信息", "调用示例与变量", "数据权限与口径", "接口清单",
+                "枚举与字典", "错误信息总表", "口径与边界", "部署前置", "代码位置", "待确认"]
+
+API_MD_CHECKS = [
+    ("## 基本信息", r"^##\s*基本信息"),
+    ("## 调用示例与变量", r"^##\s*调用示例与变量"),
+    ("## 数据权限与口径", r"^##\s*数据权限"),
+    ("## 接口清单", r"^##\s*接口清单"),
+    ("逐接口小节（### 请求参数/请求体）", r"^###\s*请求参数|^###\s*请求体"),
+    ("curl 可执行示例", r"\bcurl\b"),
+    ("失败/错误响应示例", r"失败响应|失败示例|错误示例|校验失败"),
+    ("## 枚举与字典", r"^##\s*枚举"),
+    ("## 错误信息总表", r"^##\s*错误信息"),
+    ("## 口径与边界", r"^##\s*口径"),
+    ("## 部署前置", r"^##\s*部署前置"),
+    ("## 待确认", r"^##\s*待确认"),
+    ("related 关联配套 OpenAPI", r"(?m)^related:[\s\S]{0,900}?OpenAPI"),
+]
+
+OPENAPI_CHECKS = [
+    ("```yaml 代码块", r"```yaml"),
+    ("openapi 3.x 版本声明", r"(?m)^\s*openapi:\s*3\."),
+    ("info.description（平台约定/数据权限/前置）", r"(?s)info:.*?\n\s*description:"),
+    ("成功响应示例", r"(?s)examples?:\s*\n?\s*success|code:\s*200"),
+    ("失败响应示例", r"(?s)examples?:\s*\n?\s*fail|code:\s*500"),
+    ("related 关联（须含人读文档）", r"(?m)^related:\s*(\r?\n\s*-\s*\S|\[)"),
+]
+
+PLACEHOLDER = "（待填写）"
+
+API_MD_STUBS = {
+    "基本信息": ("| 项 | 说明 |\n|---|---|\n| 请求前缀 | `（待填写）` |\n"
+               "| 请求格式 | GET（query string）；POST/PUT（`application/json`） |\n"
+               "| 响应格式 | `application/json`；HTTP 200 + body.code |\n"
+               "| 统一响应 | `{code,msg,data}` |\n"
+               "| 认证 | `Authorization: Bearer {token}` |\n"
+               "| 时间格式 | `yyyy-MM-dd HH:mm:ss`（GMT+8） |\n"
+               "| 数据权限 | （待填写） |\n"
+               "| 权限点 | （待填写） |\n"
+               "| OpenAPI 规范 | （待填写：配套 type=openapi 文档 id） |\n"
+               "| 状态码 | 200 成功；500 业务校验失败；401 未登录；403 无权限 |"),
+    "调用示例与变量": ("```bash\nBASE='http://127.0.0.1:8080'   # 取配套 OpenAPI 的 servers\n"
+                 "TOKEN='<登录接口返回的 token>'      # 平台统一登录态\n```\n\n"
+                 "> 下列 curl 只替换 `BASE` / `TOKEN` 即可直接执行。"),
+    "数据权限与口径": "| 入参 | 语义 |\n|---|---|\n| 不传 | 登录人数据权限内全部（汇总） |\n\n（待填写）：写操作校验口径、越权时的报错原文。",
+    "接口清单": "| # | 接口 | 方法 | 权限点 | 说明 |\n|---|---|---|---|---|\n| 1 | （待填写） | GET | — | — |",
+    "枚举与字典": "| 枚举 | 值 | 含义 | 来源 |\n|---|---|---|---|\n| （待填写） | | | |",
+    "错误信息总表": "| 错误信息 | 触发场景 |\n|---|---|\n| （待填写） | |",
+    "口径与边界": "1. （待填写）：明确写出「本轮不做/允许」的行为（越权、null 语义、历史数据等）。",
+    "部署前置": "1. （待填写）：SQL 执行顺序；2. 角色权限点整组勾选；3. 是否需重启；4. 前端改造点。",
+    "代码位置": "- （待填写）：Controller / Service / Mapper / 枚举 / 前端页面（全路径）。",
+    "待确认": "- （待填写）：未定口径写这里（现象 + 影响面），不得编造。",
+}
+
+OPENAPI_STUB = (
+    "> 本页为 OpenAPI 3.0.x 规范，可导入 Apifox / Bruno（源文件导出："
+    "`E:\\project-docs\\<project>\\api\\<业务名>-OpenAPI.yaml`）。\n"
+    "> 字段与业务口径见配套人读文档（vN）。**前置**：（待填写）\n\n"
+    "```yaml\n"
+    "openapi: 3.0.1\n"
+    "info:\n"
+    "  title: （待填写）\n"
+    "  version: \"1.0.0\"\n"
+    "  description: |\n"
+    "    ## 平台约定\n"
+    "    - 响应统一 HTTP 200 + body.code（200 成功 / 500 业务失败 / 401 未登录 / 403 无权限）\n"
+    "    - 认证：Authorization: Bearer {token}\n"
+    "    ## 数据权限\n"
+    "    - （待填写）\n"
+    "    ## 前置\n"
+    "    - （待填写）\n"
+    "servers:\n"
+    "  - url: http://127.0.0.1:8080\n"
+    "    description: 测试环境\n"
+    "paths: {}\n"
+    "components:\n"
+    "  schemas: {}\n"
+    "```"
+)
+
+
+def _md_h2_spans(rest: str):
+    """[(名称, 起始行, 结束行)]：正文里每个 H2 小节的范围（结束行=下一小节起始行或文末）。"""
+    lines = rest.split("\n")
+    spans = []
+    for i, line in enumerate(lines):
+        m = re.match(r"^##\s+(.+?)\s*$", line)
+        if m:
+            spans.append([m.group(1), i, len(lines)])
+    for j in range(len(spans) - 1):
+        spans[j][2] = spans[j + 1][1]
+    return [(n, s, e) for n, s, e in spans]
+
+
+def _api_section_key(name: str):
+    """小节名 → 规范骨架键：去掉「一、」「1.」等序号后与骨架名互含即命中。"""
+    clean = re.sub(r"^[一二三四五六七八九十0-9]+\s*[、.．:：]\s*", "", str(name)).strip()
+    if len(clean) < 2:
+        return ""
+    for key in API_MD_ORDER:
+        if clean.startswith(key) or key.startswith(clean):
+            return key
+    return ""
+
+
+def lint_doc(dtype: str, text: str):
+    """规范骨架检查：返回 {ok, missing, placeholders}（缺哪些必填小节、哪些小节还是占位）。"""
+    checks = OPENAPI_CHECKS if dtype == "openapi" else API_MD_CHECKS
+    missing = [label for label, rx in checks if not re.search(rx, text, re.M)]
+    placeholders = []
+    if dtype == "openapi":
+        if PLACEHOLDER in text:
+            placeholders.append("正文仍含「（待填写）」占位")
+    else:
+        lines = text.split("\n")
+        for name, s, e in _md_h2_spans(text):
+            key = _api_section_key(name)
+            if key and PLACEHOLDER in "\n".join(lines[s:e]):
+                placeholders.append(key)
+        placeholders = sorted(set(placeholders))
+    return {"ok": not missing and not placeholders, "missing": missing, "placeholders": placeholders}
+
+
+def scaffold_api_md(rest: str):
+    """按规范骨架补齐缺失的 H2 小节（占位内容带「（待填写）」），返回 (新正文, 插入的小节名)。"""
+    spans = _md_h2_spans(rest)
+    present = {k for k in (_api_section_key(n) for n, _s, _e in spans) if k}
+    missing = [k for k in API_MD_ORDER if k not in present]
+    if not missing:
+        return rest, []
+    groups = {}
+    for key in missing:
+        want = API_MD_ORDER.index(key)
+        pos = len(rest.split("\n"))
+        for name, s, _e in spans:
+            other = _api_section_key(name)
+            if other and API_MD_ORDER.index(other) > want:
+                pos = s
+                break
+        groups.setdefault(pos, []).append(key)
+    lines = rest.split("\n")
+    for pos in sorted(groups, reverse=True):
+        block = []
+        for key in groups[pos]:
+            block += ["", f"## {key}", ""] + API_MD_STUBS[key].split("\n") + [""]
+        lines[pos:pos] = block
+    return "\n".join(lines), missing
+
+
+def scaffold_openapi_md(rest: str):
+    """规范要求 YAML 包在 ```yaml 代码块内；没有就补一段骨架。"""
+    if re.search(r"```yaml", rest):
+        return rest, []
+    return rest.rstrip("\n") + "\n\n" + OPENAPI_STUB + "\n", ["OpenAPI YAML 骨架"]
+
+
 def run_git(args, cwd=None):
     proc = subprocess.run(["git"] + args, cwd=str(cwd or DOCS), capture_output=True, text=True)
     return proc.returncode, (proc.stdout or "").strip(), (proc.stderr or "").strip()
-
-
 def run_build():
     t0 = time.monotonic()
     try:
@@ -1208,6 +1365,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 link=("重新登录站点", "/login"))
         return self.notice_page("分享不可用", ["链接状态异常，请向分享者索取新链接。"])
 
+    def share_no_token_page(self):
+        """访客带着 ?share=1 直接打开文档深链、但从未经入口拿到凭证。
+
+        跳登录页会让人以为站点要密码（实测中最常见的困惑来源），这里给出可理解的说明。
+        """
+        return self.notice_page(
+            "分享链接未激活",
+            ["这份分享的凭证只在分享入口链接首次打开时下发一次。",
+             "你打开的是文档地址（地址里只有 ?share=1，它只是访客视图标志，不是凭证）。",
+             "请向分享者索取以 /s/ 开头的分享入口链接，从那里进入即可看到全部内容。"],
+            link=("重新登录站点", "/login"))
+
     def share_denied_page(self, reason, item=None):
         # 「返回分享首页」应回到这份分享自己的落地页（单篇=文档页，模块=主题页），
         # 并额外给出「以站点密码登录」出口，避免站点主人被卡死在这页。
@@ -1249,16 +1418,22 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                         not project or not sc["projects"] or project in sc["projects"]):
                     return item, grants
         key = doc_path_key(path)
-        for item in grants:
-            if not module_scope(item) and doc_path_key(item.get("path", "")) == key:
-                return item, grants
-        # 作用域分享的文档页：按文档反查它属于哪个分享（页面本身不知道自己的主题/项目）
+        # 作用域分享的文档页：按文档反查它属于哪个分享（页面本身不知道自己的主题/项目）。
+        # 两条约束缺一不可：
+        #   1) 必须先于单篇匹配——同一浏览器同时持有「项目分享 + 其中某篇的单篇分享」时，
+        #      若先命中单篇会返回 scope=doc，访客从模块侧栏点进来就会丢掉模块视图。
+        #   2) 只能匹配该作用域的「当前版」——模块/项目分享只暴露最新链头（含 pending），
+        #      历史版与已归档不开放；单篇分享仍可指向任意版本（下面的单篇分支负责）。
         if path:
             entry = snapshot()["by_url"].get(key)
             if entry:
                 for item in grants:
-                    if scope_matches_entry(module_scope(item), entry):
+                    sc = module_scope(item)
+                    if sc and any(e["id"] == entry["id"] for e in scope_entries(sc)):
                         return item, grants
+        for item in grants:
+            if not module_scope(item) and doc_path_key(item.get("path", "")) == key:
+                return item, grants
         return None, grants
 
     def api_share_ctx(self, qs):
@@ -1486,6 +1661,32 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             log_line(f"write ok in {time.monotonic() - t0:.1f}s commit={commit or '-'} :: {msg}")
             return self.json_response(200, info)
 
+    def admin_lint(self, qs):
+        """规范骨架体检（只读）：列出 api/openapi 文档缺失的必填小节与仍占位的小节。"""
+        project = (qs.get("project", [""])[0] or "").strip()
+        dtype = (qs.get("type", [""])[0] or "").strip()
+        doc_id = (qs.get("id", [""])[0] or "").strip()
+        docs, scanned = [], 0
+        for e in sorted(read_entries(), key=lambda x: x["id"]):
+            t = str(e["meta"].get("type") or "other")
+            if t not in ("api", "openapi"):
+                continue
+            if project and str(e["meta"].get("project") or "") != project:
+                continue
+            if dtype and t != dtype:
+                continue
+            if doc_id and e["id"].lower() != doc_id.lower():
+                continue
+            scanned += 1
+            fmt = lint_doc(t, e["text"])
+            if not fmt["ok"]:
+                docs.append({"id": e["id"], "type": t,
+                             "project": str(e["meta"].get("project") or ""),
+                             "status": str(e["meta"].get("status") or ""),
+                             "url": doc_url(e["id"]),
+                             "missing": fmt["missing"], "placeholders": fmt["placeholders"]})
+        return self.json_response(200, {"scanned": scanned, "count": len(docs), "docs": docs})
+
     def admin_create(self, payload):
         def mutate(entries):
             project = str(payload.get("project", "")).strip()
@@ -1549,14 +1750,27 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if payload.get("summary"):
                 head["summary"] = str(payload["summary"])
             path.parent.mkdir(parents=True, exist_ok=True)
+            text = ""
+            scaffolded = []
             if dtype == "sql":
                 path.write_text(render_sql_meta(head, content.lstrip("\n")), encoding="utf-8")
             else:
-                path.write_text(render_md(head, "\n" + content.lstrip("\n")), encoding="utf-8")
+                # api/openapi：按《API 文档规范》骨架补齐缺失小节（scaffold=false 可关闭）
+                if dtype in ("api", "openapi") and payload.get("scaffold") is not False:
+                    if dtype == "openapi":
+                        content, scaffolded = scaffold_openapi_md(content)
+                    else:
+                        content, scaffolded = scaffold_api_md(content)
+                text = render_md(head, "\n" + content.lstrip("\n"))
+                path.write_text(text, encoding="utf-8")
             rel = path.relative_to(DOCS).as_posix()
             doc_id = rel.rsplit(".", 1)[0]
-            return {"id": doc_id, "url": doc_url(doc_id), "path": rel,
-                    "commit_message": f"feat: 新建文档 {doc_id}"}
+            out = {"id": doc_id, "url": doc_url(doc_id), "path": rel,
+                   "commit_message": f"feat: 新建文档 {doc_id}"}
+            if dtype in ("api", "openapi"):
+                out["scaffold"] = scaffolded
+                out["format"] = lint_doc(dtype, text)
+            return out
 
         return self.admin_write(mutate)
 
@@ -1626,12 +1840,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                          "supersedes": entry["id"]})
             if payload.get("related"):
                 head["related"] = [str(r) for r in payload["related"]]
-            path.write_text(render_md(head, "\n" + content.lstrip("\n")), encoding="utf-8")
+            text = render_md(head, "\n" + content.lstrip("\n"))
+            path.write_text(text, encoding="utf-8")
             new_id = path.relative_to(DOCS).as_posix().rsplit(".", 1)[0]
             save_entry_fields(entry, {"superseded_by": new_id, "status": "archived"})
-            return {"id": new_id, "url": doc_url(new_id),
-                    "path": path.relative_to(DOCS).as_posix(), "supersedes": entry["id"],
-                    "commit_message": f"feat: 版本化 {new_id}"}
+            out = {"id": new_id, "url": doc_url(new_id),
+                   "path": path.relative_to(DOCS).as_posix(), "supersedes": entry["id"],
+                   "commit_message": f"feat: 版本化 {new_id}"}
+            if dtype in ("api", "openapi"):
+                out["format"] = lint_doc(dtype, text)
+            return out
 
         return self.admin_write(mutate)
 
@@ -2038,6 +2256,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self.admin_doc(qs)
             if path == "/api/admin/review":
                 return self.admin_review(qs)
+            if path == "/api/admin/lint":
+                return self.admin_lint(qs)
             return self.json_response(404, {"error": "unknown admin endpoint"})
         if path == "/api/status-options":
             return self.api_status_options(qs)
@@ -2075,6 +2295,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         for token in self.share_tokens():
             if token in shares:
                 return self.share_invalid_page(token)
+        # 从未拿到凭证的访客深链（?share=1 只是访客视图标志，不是凭证）→ 说明页而非登录页
+        if qs.get("share", [""])[0] == "1":
+            return self.share_no_token_page()
         return self.redirect("/login?next=" + urllib.parse.quote(self.path))
 
     def consume_share(self, token):

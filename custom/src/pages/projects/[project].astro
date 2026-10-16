@@ -100,6 +100,10 @@ const historical = docs.filter((d) => !isCurrent(d));
       <input type="text" id="pshare-url" readonly />
       <button class="copy-btn" id="pshare-copy">复制</button>
     </div>
+    <p class="hint share-tip" id="pshare-tip" hidden>
+      转发请用上面这条 <b>/s/ 入口链接</b>：凭证只在首次打开它时下发一次。
+      直接复制地址栏里的文档地址（带 <code>?share=1</code>）发给别人会显示「分享链接未激活」。
+    </p>
     <div class="share-error" id="pshare-error" hidden></div>
   </div>
 </div>
@@ -299,6 +303,8 @@ const historical = docs.filter((d) => !isCurrent(d));
           urlEl.value = d.url;
           resultEl.hidden = false;
           listEl.innerHTML = `<span class="muted">已创建，开放 ${d.doc_count} 篇当前版文档。</span>`;
+          const tip = document.getElementById('pshare-tip');
+          if (tip) tip.hidden = false;
         } catch (e) {
           errEl.hidden = false;
           errEl.textContent = e.message || '创建失败';

@@ -101,11 +101,16 @@ check("模块入口 303 到主题页且不带 token",
       st == 303 and loc.startswith("/topics/") and "s=" not in loc, f"{st} -> {loc}")
 mcookie = h.get("Set-Cookie", "").split(";")[0]
 
-v2 = opener()
-st2, h2, _ = call(v2, surl)
-scookie = h2.get("Set-Cookie", "").split(";")[0]
-combined = mcookie + "; " + scookie
-check("多 token cookie 合并", mtoken in combined and stoken in combined, combined[:90])
+# 同一浏览器再打开单篇入口：服务端必须把两个 token 并入同一个 ws_share cookie（逗号分隔）。
+# 曾经测试用「ws_share=A; ws_share=B」两个同名 cookie 模拟，那不是浏览器的真实形态
+# （同名同域 cookie 会互相覆盖），导致多凭证场景的回归被漏掉。
+st2, h2, _ = call(v, surl)
+merged_hdr = h2.get("Set-Cookie", "").split(";")[0]
+check("多 token cookie 合并（单 cookie 逗号分隔）",
+      merged_hdr.startswith("ws_share=") and mtoken in merged_hdr and stoken in merged_hdr,
+      merged_hdr[:90])
+combined = "ws_share=" + mtoken + "," + stoken
+scookie = "ws_share=" + stoken
 
 st, h, b = call(v, BASE + dpath(doc_ids[1]), cookie=combined)
 loc = h.get("Location", "")
@@ -116,6 +121,30 @@ check("模块内当前版文档可访问（缺 share 参数由服务端补 303�
 
 st, h, b = call(v, BASE + dpath(doc_ids[0]), cookie=combined)
 check("模块内已升版的新版可访问", st == 200, st)
+
+print("=== 多凭证并存回归 ===")
+# 文档页不知道自己属于哪个主题/项目，只会发 path 参数。同一浏览器同时持有
+# 「模块分享 + 其中某篇的单篇分享」时，服务端必须优先返回覆盖该文档的模块
+# scope；若先命中单篇会返回 scope=doc，前端就会隐藏模块侧栏（历史 bug）。
+st, h, b = call(v, BASE + "/api/share/ctx?path=" + urllib.parse.quote(dpath(doc_ids[1])),
+                cookie=combined)
+try:
+    cj = json.loads(b)
+except Exception:
+    cj = {}
+check("回归 多凭证并存时 ctx 返回模块 scope（不退回单篇）",
+      st == 200 and cj.get("scope") == "topic" and len(cj.get("docs", [])) == 2,
+      f"{st} scope={cj.get('scope')} docs={len(cj.get('docs', []))}")
+
+# 反向保护：只有单篇凭证时仍是 doc scope，不能把单篇分享误升级成模块视图
+st, h, b = call(opener(), BASE + "/api/share/ctx?path=" + urllib.parse.quote(dpath(doc_ids[1])),
+                cookie=scookie)
+try:
+    dj = json.loads(b)
+except Exception:
+    dj = {}
+check("回归 仅单篇凭证时 ctx 仍返回 doc scope",
+      st == 200 and dj.get("scope") == "doc", f"{st} scope={dj.get('scope')}")
 
 print("=== 负向用例 ===")
 outside = dpath("xingtai-smart-store-api/助农/api/助农售卖配置接口-v1")
