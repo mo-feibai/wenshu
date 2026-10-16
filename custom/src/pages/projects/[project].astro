@@ -80,6 +80,8 @@ const historical = docs.filter((d) => !isCurrent(d));
   <div class="share-card">
     <h3>分享项目文档</h3>
     <p class="hint">访客将看到<b>当前筛选</b>下的全部<b>当前版</b>文档，并可在范围内全文搜索；历史版本、已归档与已淘汰文档不开放。链接无需密码，到期自动失效。</p>
+    <p class="hint scope-line" id="pshare-scope"></p>
+    <div class="mshare-alt"><button type="button" class="copy-btn" id="pshare-all" hidden>改为分享整个项目</button></div>
     <div class="mshare-list" id="pshare-list">加载中…</div>
     <label class="field">到期时间
       <input type="datetime-local" id="pshare-expiry" />
@@ -229,8 +231,27 @@ const historical = docs.filter((d) => !isCurrent(d));
         quick.querySelectorAll('.quick-btn').forEach((b) => b.removeAttribute('data-active')));
 
       let loadedKey = '';
+      const scopeEl = document.getElementById('pshare-scope');
+      const allBtn = document.getElementById('pshare-all');
+      if (allBtn) {
+        allBtn.addEventListener('click', () => {
+          const u = new URL(location.href);
+          u.searchParams.delete('type');
+          history.replaceState(null, '', u);
+          applyFilter('all');
+          loadedKey = '';
+          openBtn.click();
+        });
+      }
       openBtn.addEventListener('click', async () => {
         modal.hidden = false;
+        // 范围写在最前面，避免「以为分享了整个项目」
+        if (scopeEl) {
+          scopeEl.innerHTML = curType && curType !== 'all'
+            ? `当前范围：<b>项目 · ${esc(projectName)} · ${esc(curType)}</b>（仅该类型的当前版）`
+            : `当前范围：<b>项目 · ${esc(projectName)}</b>（全部类型）`;
+        }
+        if (allBtn) allBtn.hidden = !(curType && curType !== 'all');
         if (loadedKey === curType) return;
         listEl.textContent = '加载中…';
         createBtn.disabled = true;
@@ -244,12 +265,14 @@ const historical = docs.filter((d) => !isCurrent(d));
           const d = await r.json();
           loadedKey = curType;
           if (!d.docs || !d.docs.length) {
-            listEl.innerHTML = '<span class="muted">该筛选下没有可分享的当前版文档。</span>';
-            createBtn.disabled = true;
+            listEl.innerHTML = `<span class="muted">该筛选下只有 ${d.count} 篇当前版文档，访客将只能看到这 ${d.count} 篇。</span>`;
+            createBtn.disabled = false;
             return;
           }
+          const thin = d.count <= 3;
           listEl.innerHTML =
-            `<div class="muted">将开放 ${d.count} 篇当前版文档（含未实现的 pending 文档）：</div>` +
+            `<div class="muted">将开放 <b>${d.count}</b> 篇当前版文档（含未实现的 pending 文档）：</div>` +
+            (thin ? `<div class="muted warn">该范围很窄，访客只能看到下面这 ${d.count} 篇；若想分享整个项目，请点上方「改为分享整个项目」。</div>` : '') +
             d.docs.map((x) => `<div class="mshare-item"><span>${esc(x.title)}</span><span class="mshare-tag">${esc((x.type || '').toUpperCase())} · ${esc(x.status)}</span></div>`).join('');
           createBtn.disabled = false;
         } catch {

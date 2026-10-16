@@ -295,6 +295,17 @@ html.module-mode .search-wrap { display: block; }
 .mshare-item { display: flex; gap: 8px; align-items: baseline; justify-content: space-between; }
 .mshare-item > span:first-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .mshare-tag { color: var(--faint); font-size: 11px; flex-shrink: 0; }
+/* 分享弹窗：范围明示 + 窄范围提醒 + 一键改为整项目 */
+.share-card .scope-line {
+  margin: 0 0 10px; padding: 9px 11px; border-radius: 10px;
+  background: var(--bg-soft); border: 1px solid var(--border); color: var(--text);
+}
+.share-card .scope-line b { color: var(--accent); }
+.mshare-alt { margin: 0 0 8px; }
+.mshare-alt .copy-btn { width: 100%; }
+.mshare-list .muted.warn { color: var(--warn, #d97706); margin-top: 6px; }
+/* 访客落地页的分享范围说明行 */
+.share-scope { margin: 10px 0 0; font-size: 13px; line-height: 1.7; color: var(--muted, #8d99b3); }
 .mshare-note { margin-top: 8px; color: var(--amber); }
 .quick-btn[data-active] { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 

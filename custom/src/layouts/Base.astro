@@ -209,36 +209,48 @@ const totalPending = entries.filter((e) => e.data.status === 'pending').length;
         const q = document.getElementById('q');
         if (q) q.placeholder = '在本模块内搜索（Ctrl+K）';
 
-        /* 主题落地页：只保留模块清单，隐藏历史版本链与内部操作入口 */
-        if (topic) {
-          document.querySelectorAll('.version-chain').forEach((n) => n.remove());
-          document.querySelectorAll('.module-share').forEach((n) => n.remove());
+        /* 落地页清理：只保留分享作用域内的文档（主题落地页与项目落地页都必须做，
+           否则项目落地页会把历史版本、其它类型的文档也列给访客） */
+        if (topic || proj) {
+          document.querySelectorAll('.version-chain, .module-share, .type-filter, .project-tools')
+            .forEach((n) => n.remove());
           const allowedLanding = new Set(ctx.docs.map((d) => decodePath(d.url).replace(/\/$/, '')));
+          let hidden = 0;
+          const dropCard = (item) => {
+            const a = item.querySelector('a[href]');
+            const href = a ? decodePath(a.getAttribute('href') || '').replace(/\/$/, '') : '';
+            if (!allowedLanding.has(href)) { item.remove(); hidden++; }
+          };
           const tl = document.querySelector('.timeline');
-          if (tl) {
-            let hidden = 0;
-            tl.querySelectorAll('.tl-item').forEach((item) => {
-              const a = item.querySelector('a[href]');
-              const href = a ? decodePath(a.getAttribute('href') || '').replace(/\/$/, '') : '';
-              if (!allowedLanding.has(href)) { item.remove(); hidden++; }
+          if (tl) tl.querySelectorAll('.tl-item').forEach(dropCard);
+          const pg = document.querySelector('.project-groups');
+          if (pg) pg.querySelectorAll('.project-card').forEach(dropCard);
+          if (tl && !tl.querySelector('.tl-item')) tl.remove();
+          if (pg) {
+            pg.querySelectorAll('.type-group').forEach((g) => {
+              if (!g.querySelector('.project-card')) g.remove();
             });
-            const hero = document.querySelector('.hero');
-            const sub = hero && hero.querySelector('p');
-            if (sub && hidden) {
-              sub.textContent = `本模块开放 ${ctx.docs.length} 篇当前版文档`
-                + (hidden ? `（已隐藏 ${hidden} 篇历史版本、已归档或已淘汰文档）` : '');
-            }
-            if (!ctx.docs.length) tl.remove();
+            if (!pg.querySelector('.project-card')) pg.remove();
           }
-        }
-        /* 落地页无文档时的提示 */
-        if (topic && ctx.docs.length === 0) {
-          const hero = document.querySelector('.hero');
-          if (hero && !hero.querySelector('.share-empty')) {
-            const p = document.createElement('p');
-            p.className = 'share-empty';
-            p.textContent = '本模块暂无可访问的文档。';
-            hero.appendChild(p);
+          const hero = document.querySelector('.hero') || document.querySelector('.project-hero');
+          const sub0 = hero && hero.querySelector('p');
+          if (hero) {
+            const scopeName = topic
+              ? `主题 · ${topic}`
+              : (ctx.type ? `项目 · ${proj} · ${ctx.type}` : `项目 · ${proj}`);
+            const txt = `本分享开放 ${ctx.docs.length} 篇当前版文档`
+              + (hidden ? `（已隐藏 ${hidden} 篇不在分享范围内的文档）` : '')
+              + `　范围：${scopeName}`;
+            // 项目页 hero 没有 <p>（只有 .project-stats），需要新建一个说明行
+            const sub = sub0 || Object.assign(document.createElement('p'), { className: 'share-scope' });
+            if (!sub0) hero.appendChild(sub);
+            sub.textContent = txt;
+          }
+          if (!ctx.docs.length) {
+            const p2 = document.createElement('p');
+            p2.className = 'share-empty';
+            p2.textContent = '本模块暂无可访问的文档。';
+            (hero || pg || document.body).appendChild(p2);
           }
         }
 
