@@ -9,6 +9,9 @@ __pycache__/
 custom/server_config.json
 custom/sessions.json
 custom/shares.json
+custom/wenshu.log
+custom/wenshu.log.1
+custom/build-failed-rescue.patch
 
 # 由文档库生成的站点内容（构建时重新生成）
 custom/src/content/docs/

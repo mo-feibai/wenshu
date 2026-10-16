@@ -1,7 +1,7 @@
 ---
 import { getCollection } from 'astro:content';
 import Base from '../../layouts/Base.astro';
-import { fmtDate } from '../../lib/helpers';
+import { docUrl, fmtDate } from '../../lib/helpers';
 
 export async function getStaticPaths() {
   const entries = await getCollection('docs');
@@ -17,7 +17,7 @@ const entries = (await getCollection('docs')).filter((e) => e.data.project === p
 
 const docs = entries.map((e) => ({
   id: e.id,
-  url: `/docs/${e.id}/`,
+  url: docUrl(e.id),
   title: e.data.title || e.id,
   topic: e.data.topic || '',
   type: (e.data.type || 'other').toString(),

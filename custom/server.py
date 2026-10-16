@@ -5,6 +5,7 @@
 import datetime
 import http.server
 import json
+import os
 import pathlib
 import re
 import secrets
@@ -42,6 +43,23 @@ WRITE_LOCK = threading.Lock()
 PUBLIC_PREFIXES = ("/fonts/",)
 PUBLIC_FILES = ("/favicon.svg", "/logo.svg")
 SHARE_ASSET_PREFIXES = ("/fonts/", "/_astro/", "/favicon.svg", "/logo.svg")
+
+LOG_PATH = BASE / "wenshu.log"
+_LOG_LOCK = threading.Lock()
+
+
+def log_line(msg):
+    """追加一行运行日志（>5MB 轮转一份 .1）；任何写入失败静默，不影响请求。"""
+    stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    try:
+        with _LOG_LOCK:
+            if LOG_PATH.exists() and LOG_PATH.stat().st_size > 5 * 1024 * 1024:
+                os.replace(LOG_PATH, LOG_PATH.with_name(LOG_PATH.name + ".1"))
+            with LOG_PATH.open("a", encoding="utf-8") as fh:
+                fh.write(f"[{stamp}] {msg}\n")
+    except OSError:
+        pass
+
 
 DOC_TYPES = ["sql", "api", "openapi", "adr", "analysis", "scheme", "report", "other"]
 STATUS_SETS = {
@@ -638,12 +656,39 @@ def load_retention():
         return dict(RETENTION_DEFAULTS)
 
 
+_GIT_DATES = {"key": None, "map": {}}
+
+
+def _git_last_dates():
+    """一次 git log 建立 {相对路径: 最后提交日}，按 HEAD 缓存（替代逐篇 spawn git，review 从秒级到毫秒级）。"""
+    code, head, _ = run_git(["rev-parse", "HEAD"])
+    key = head if code == 0 else ""
+    cache = _GIT_DATES
+    if key and cache["key"] == key and cache["map"]:
+        return cache["map"]
+    dates = {}
+    code, out, _ = run_git(["log", "--format=%cs", "--name-only"])
+    if code == 0:
+        cur = ""
+        for raw in out.splitlines():
+            line = raw.strip()
+            if not line:
+                continue
+            if len(line) == 10 and line[4] == "-" and line[7] == "-":
+                cur = line
+            elif cur and line not in dates:
+                dates[line] = cur
+    cache["key"] = key
+    cache["map"] = dates
+    return dates
+
+
 def last_active(entry):
     """文档最后活跃日：git 最后提交日（兜底 frontmatter.updated）。"""
-    code, out, _ = run_git(["log", "-1", "--format=%cs", "--", entry["rel"]])
-    if code == 0 and out:
+    v = _git_last_dates().get(entry["rel"])
+    if v:
         try:
-            return datetime.date.fromisoformat(out)
+            return datetime.date.fromisoformat(v)
         except ValueError:
             pass
     for k in ("updated", "date"):
@@ -881,9 +926,17 @@ def run_git(args, cwd=None):
 
 
 def run_build():
-    proc = subprocess.run(["npm", "run", "build"], cwd=str(BASE), capture_output=True, text=True, timeout=900)
-    out = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
-    return proc.returncode == 0, "\n".join(out.splitlines()[-8:])
+    t0 = time.monotonic()
+    try:
+        proc = subprocess.run(["npm", "run", "build"], cwd=str(BASE), capture_output=True, text=True, timeout=900)
+        ok = proc.returncode == 0
+        out = ((proc.stdout or "") + "\n" + (proc.stderr or "")).strip()
+    except subprocess.TimeoutExpired:
+        ok, out = False, "build timeout (>900s)"
+    tail = "\n".join(out.splitlines()[-8:])
+    dur = time.monotonic() - t0
+    log_line(f"build {'ok' if ok else 'FAILED'} in {dur:.1f}s" + ("" if ok else " | " + tail.replace("\n", " ⏎ ")[:800]))
+    return ok, tail
 
 
 LOGIN_HTML = """<!DOCTYPE html>
@@ -997,8 +1050,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         super().__init__(*args, directory=str(ROOT), **kwargs)
 
     def log_message(self, fmt, *args):
-        stamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        print(f"[{stamp}] {fmt % args}")
+        try:
+            line = fmt % args
+        except Exception:
+            return
+        # 静态资源噪声不落盘，保留页面/接口/分享等有意义的请求
+        if '"GET /fonts/' in line or '"GET /_astro/' in line or '"GET /pagefind/' in line:
+            return
+        log_line(line)
 
     # ---------- 工具 ----------
     def cookies(self):
@@ -1380,6 +1439,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return self.json_response(200, brief)
 
     def admin_write(self, mutate):
+        t0 = time.monotonic()
         with WRITE_LOCK:
             entries = read_entries()
             try:
@@ -1390,8 +1450,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 return self.json_response(500, {"error": f"内部错误: {exc}"})
             ok, tail = run_build()
             if not ok:
+                # 构建失败不能静默丢改动：先把工作区 diff 存成救援补丁，再回滚文档库
+                _, diff, _ = run_git(["diff", "HEAD"])
+                if diff.strip():
+                    try:
+                        (BASE / "build-failed-rescue.patch").write_text(diff + "\n", encoding="utf-8")
+                        log_line(f"write rollback: rescued {len(diff)}B diff -> build-failed-rescue.patch")
+                    except OSError:
+                        pass
                 run_git(["checkout", "--", "."])
-                return self.json_response(500, {"error": "构建失败，已回滚", "detail": tail})
+                log_line(f"write FAILED (build) in {time.monotonic() - t0:.1f}s | " + tail.replace("\n", " ⏎ ")[:600])
+                return self.json_response(500, {"error": "构建失败，已回滚（改动已存入 build-failed-rescue.patch）", "detail": tail})
             msg = info.pop("commit_message", "chore: wenshu api update")
             run_git(["add", "-A"])
             code, _, _ = run_git(["commit", "-m", msg])
@@ -1402,6 +1471,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if isinstance(info, dict) and info.get("id") and "url" in info:
                 info["url"] = doc_url(str(info["id"]))
             info.update({"ok": True, "built": True, "commit": commit if code == 0 else ""})
+            log_line(f"write ok in {time.monotonic() - t0:.1f}s commit={commit or '-'} :: {msg}")
             return self.json_response(200, info)
 
     def admin_create(self, payload):

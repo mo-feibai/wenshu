@@ -3,7 +3,7 @@ import { getCollection } from 'astro:content';
 import Base from '../../layouts/Base.astro';
 import EntryCard from '../../components/EntryCard.astro';
 import StatusBadge from '../../components/StatusBadge.astro';
-import { chainTitle, versionFamilies } from '../../lib/helpers';
+import { chainTitle, docUrl, versionFamilies } from '../../lib/helpers';
 import assetsRaw from '../../data/assets.json';
 
 export async function getStaticPaths() {
@@ -174,7 +174,7 @@ const versionChains = [...versionFamilies(list).families.values()].filter((f) =>
           {chain.map((e: any, i: number) => (
             <>
               {i > 0 && <span class="version-arrow">→</span>}
-              <a class={`version-chip ${e.data.status === 'pending' ? 'current' : ''}`} href={`/docs/${e.id.split('/').map(encodeURIComponent).join('/')}/`}>
+              <a class={`version-chip ${e.data.status === 'pending' ? 'current' : ''}`} href={docUrl(e.id)}>
                 v{e.data.version} <StatusBadge status={e.data.status} />
               </a>
             </>
