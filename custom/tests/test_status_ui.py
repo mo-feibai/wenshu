@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """页面状态切换：8 条验证。用临时文档，不动存量。"""
-import http.cookiejar, json, pathlib, time
+import http.cookiejar, json, pathlib, sys, time
 import urllib.error, urllib.parse, urllib.request
 
 BASE = "http://127.0.0.1:8903"
@@ -114,3 +114,4 @@ left = list(pathlib.Path("/opt/wenshu/docs/statustest").rglob("*")) \
 check("10 清理完成", not left, str(left))
 
 print("\n结果: %d/%d 通过" % (sum(R), len(R)))
+sys.exit(0 if all(R) else 1)

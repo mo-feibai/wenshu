@@ -108,7 +108,11 @@ combined = mcookie + "; " + scookie
 check("多 token cookie 合并", mtoken in combined and stoken in combined, combined[:90])
 
 st, h, b = call(v, BASE + dpath(doc_ids[1]), cookie=combined)
-check("模块内当前版文档可访问", st == 200, st)
+loc = h.get("Location", "")
+# 访客访问「分享覆盖但 URL 缺 ?share=1」的页面时，服务端会 303 补参（防止掉出分享模式）
+if st == 303 and "share=1" in loc:
+    st, h, b = call(v, BASE + loc, cookie=combined)
+check("模块内当前版文档可访问（缺 share 参数由服务端补 303）", st == 200, st)
 
 st, h, b = call(v, BASE + dpath(doc_ids[0]), cookie=combined)
 check("模块内已升版的新版可访问", st == 200, st)
@@ -119,8 +123,10 @@ st, h, b = call(v, BASE + outside, cookie=combined)
 check("负向1 模块外文档被拒", "该分享不包含此内容" in b.decode("utf-8", "replace"), st)
 
 st, h, b = call(opener(), BASE + "/topics/" + urllib.parse.quote(TOPIC) + "/", cookie=scookie)
-# 站点外壳页不属于任何分享 → 回退登录跳转（站点主人日常要能进站），不是无权页
-check("负向2 单篇token 访问模块页被拒", st == 303 and "/login" in h.get("Location", ""),
+# 站点外壳页不属于任何分享 → 跳登录（无法区分纯访客与 session 过期的站点主人，
+# 两者都带 ws_share cookie；访客点不到越界入口由前端消除入口来保证，见 test_share_ui.py）
+check("负向2 单篇token 访问模块页被拒（跳登录）",
+      st == 303 and "/login" in h.get("Location", ""),
       f"{st} {h.get('Location','')}")
 
 st, h, b = call(opener(), BASE + "/s/deadbeefdeadbeef")
@@ -131,8 +137,8 @@ check("撤销模块分享", st == 200 and r.get("revoked"), f"{st} {r}")
 st, h, b = call(opener(), BASE + "/s/" + mtoken)
 check("负向4 撤销后显示已撤销", "分享已被撤销" in b.decode("utf-8", "replace"), st)
 st, h, b = call(v, BASE + "/topics/" + urllib.parse.quote(TOPIC) + "/", cookie=combined)
-# combined 里还有另一份有效的单篇分享，所以走「站点外壳页 → 登录跳转」，
-# 而不是失效说明页（失效页只在所有 token 都失效时才出现，见下一步单独验证）
+# combined 里还有另一份有效的单篇分享：既不是失效说明页（token 仍有效），
+# 也不该是无权页的正常内容；外壳页一律跳登录（站点主人日常要能进站）。
 check("负向4b 撤销后仍持有另一份有效分享→外壳页跳登录",
       st == 303 and "/login" in h.get("Location", ""), f"{st} {h.get('Location','')}")
 st, h, b = call(opener(), BASE + "/s/" + mtoken, cookie=scookie)
@@ -188,7 +194,10 @@ check("负向10b 清单同步少一篇", len(json.loads(b).get("docs", [])) == 2
       len(json.loads(b).get("docs", [])))
 
 st, h, b = call(v3, BASE + dpath(doc_ids[1]), cookie=ck)
-check("负向11 中文 id 授权成功", st == 200, st)
+loc = h.get("Location", "")
+if st == 303 and "share=1" in loc:
+    st, h, b = call(v3, BASE + loc, cookie=ck)
+check("负向11 中文 id 授权成功（含服务端补参）", st == 200, st)
 
 st, r = adm(o, "/api/shares", method="GET")
 check("分享列表可用", st == 200 and r.get("count", 0) >= 1, f"{st} count={r.get('count')}")
@@ -225,3 +234,5 @@ print("清理后剩余测试文档:", left, "| 撤销了本测试的",
 
 print()
 print(f"结果: {sum(R)}/{len(R)} 通过")
+# 失败必须返回非零，否则 run_integration.sh 会误报 ALL-PASS
+sys.exit(0 if all(R) else 1)

@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """端到端：模块分享全链路（真实文档 + 站点产物检查）。"""
-import datetime, http.cookiejar, json, re, urllib.error, urllib.parse, urllib.request
+import datetime, http.cookiejar, json, re, sys, urllib.error, urllib.parse, urllib.request
 
 BASE = "http://127.0.0.1:8903"
 CFG = json.load(open("/opt/wenshu/app/server_config.json"))
@@ -159,3 +159,4 @@ check("全新访客（无 cookie）仍跳登录页",
 
 print()
 print(f"结果: {sum(R)}/{len(R)} 通过")
+sys.exit(0 if all(R) else 1)

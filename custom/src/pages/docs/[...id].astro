@@ -377,10 +377,17 @@ const flipCopy = `请将文枢文档「${entry.data.title}」的状态从 pendin
           try { document.execCommand('copy'); done(); } catch (_) {}
         }
       });
+      /* 点遮罩空白处或按 ESC 关闭弹窗（与项目页分享弹窗一致） */
+      modal.addEventListener('click', (e) => { if (e.target === modal) modal.hidden = true; });
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !modal.hidden) modal.hidden = true;
+      });
     })();
 
     // ---------- 状态切换 ----------
     (() => {
+      // 访客（分享模式）不能改状态，也不要去请求受保护接口（否则控制台报 401）
+      if (document.documentElement.classList.contains('shared')) return;
       const box = document.querySelector('.status-switch');
       if (!box) return;
       const btns = document.getElementById('status-btns');

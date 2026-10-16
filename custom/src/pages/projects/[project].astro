@@ -308,12 +308,37 @@ const historical = docs.filter((d) => !isCurrent(d));
         }
       });
 
+      /* 复制：内网 http（192.168.x.x）不是 secure context，navigator.clipboard 不存在，
+         必须有 execCommand 兜底，否则点了毫无反应 */
       copyBtn.addEventListener('click', async () => {
-        try {
-          await navigator.clipboard.writeText(urlEl.value);
+        const done = () => {
           copyBtn.textContent = '已复制 ✓';
           setTimeout(() => (copyBtn.textContent = '复制'), 1500);
-        } catch {}
+        };
+        const fallback = () => {
+          try {
+            urlEl.focus();
+            urlEl.select();
+            const ok = document.execCommand('copy');
+            if (ok) return done();
+            copyBtn.textContent = '复制失败，请手动选中复制';
+            setTimeout(() => (copyBtn.textContent = '复制'), 2200);
+          } catch (_) {
+            copyBtn.textContent = '复制失败，请手动选中复制';
+            setTimeout(() => (copyBtn.textContent = '复制'), 2200);
+          }
+        };
+        if (navigator.clipboard && window.isSecureContext) {
+          navigator.clipboard.writeText(urlEl.value).then(done).catch(fallback);
+        } else {
+          fallback();
+        }
+      });
+
+      /* 点遮罩空白处或按 ESC 关闭弹窗（否则只能点「取消」） */
+      modal.addEventListener('click', (e) => { if (e.target === modal) modal.hidden = true; });
+      document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape' && !modal.hidden) modal.hidden = true;
       });
     }
   })();

@@ -307,6 +307,12 @@ html.module-mode .search-wrap { display: block; }
 /* 访客落地页的分享范围说明行 */
 .share-scope { margin: 10px 0 0; font-size: 13px; line-height: 1.7; color: var(--muted, #8d99b3); }
 .mshare-note { margin-top: 8px; color: var(--amber); }
+/* 快捷天数选中态：必须比 .share-quick .quick-btn 特异性更高，
+   否则会被后面同特异性的基础规则覆盖（表现为「点了没反应」） */
+.share-quick .quick-btn[data-active] {
+  border-color: var(--accent); color: var(--accent);
+  background: var(--accent-soft); font-weight: 600;
+}
 .quick-btn[data-active] { border-color: var(--accent); color: var(--accent); background: var(--accent-soft); }
 
 .side-module-head {

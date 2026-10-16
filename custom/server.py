@@ -1127,6 +1127,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return None
         return "该分享不包含此内容"
 
+    def share_page_like(self, path):
+        """该路径是否是「需要访客模式标志的 HTML 页面」（排除附件/接口/静态资源/入口）。"""
+        if path.startswith(("/files/", "/api/", "/pagefind/", "/s/")):
+            return False
+        if path in ("/login", "/logout"):
+            return False
+        if any(path.startswith(p) for p in SHARE_ASSET_PREFIXES):
+            return False
+        if path in PUBLIC_FILES or path.startswith("/favicon"):
+            return False
+        return not path.endswith((".json", ".js", ".css", ".svg", ".png", ".woff2"))
+
     def grant_allows(self, path):
         grants = self.share_grants()
         for item in grants:
@@ -2039,10 +2051,22 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if grants:
             reasons = [self.grant_denial(g, path) for g in grants]
             if any(r is None for r in reasons):
+                # 访客模式以 ?share=1 为标志，但站内链接（模块清单、相关文档、搜索结果跳转）
+                # 常常不带这个参数；一旦丢失，访客会掉出分享模式、看到完整站点（全站导航与项目树）。
+                # 由服务端补齐：仅对访客（未登录）、仅对分享覆盖的页面、且确实缺失时才重定向。
+                if self.share_page_like(path) and qs.get("share", [""])[0] != "1":
+                    # 顺带清掉畸形/重复的 share 参数（曾出现 ?share=1?share=1 这类拼接）
+                    sp = urllib.parse.urlsplit(self.path)
+                    pairs = [(k, v) for k, v in
+                             urllib.parse.parse_qsl(sp.query, keep_blank_values=True)
+                             if k != "share"]
+                    pairs.append(("share", "1"))
+                    return self.redirect(sp.path + "?" + urllib.parse.urlencode(pairs))
                 return super().do_GET()
             # 站点外壳页（根目录、主题、看板等）不属于任何分享，但站点主人日常要访问：
             # 回退到登录跳转而不是「无权页」，否则打开站点根会像坏掉一样。
-            # /docs/ 与 /files/ 保留无权页——那里「不包含此内容」才是有用的信息。
+            # 注意：无法区分「纯访客」与「曾登录但 session 过期的站点主人」，两者都带 ws_share
+            # cookie，所以这里一律跳登录；访客点不到越界入口的问题由前端消除入口来解决。
             if not (path.startswith("/docs/") or path.startswith("/files/")):
                 return self.redirect("/login?next=" + urllib.parse.quote(self.path))
             denied_item = next((g for g in grants if g is not None), grants[0])

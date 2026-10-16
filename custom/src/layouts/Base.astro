@@ -196,6 +196,26 @@ const totalPending = entries.filter((e) => e.data.status === 'pending').length;
             if (rel < 0 || rel + active.offsetHeight > sb.clientHeight) sb.scrollTop += rel - 16;
           }
         }
+        /* 越界入口处理：访客点这些链接只会跳登录页（看起来像「侧边栏消失了」）。
+           brand 改为指向本模块落地页；面包屑中不在分享范围内的段落降级为纯文本。
+           注意：模块模式在文档页上无法从 pathname 推断项目/主题（正则只匹配
+           /projects/<name>/ 与 /topics/<name>/），必须用服务端 ctx 返回的 scope。 */
+        const shareTopic = ctx.topic || topic;
+        const shareProject = ctx.project || proj;
+        const landing = shareTopic
+          ? '/topics/' + encodeURIComponent(shareTopic) + '/?share=1'
+          : (shareProject ? '/projects/' + encodeURIComponent(shareProject) + '/?share=1'
+            + (ctx.type ? '&type=' + encodeURIComponent(ctx.type) : '') : '');
+        if (landing) {
+          const brand = document.querySelector('a.brand');
+          if (brand) brand.setAttribute('href', landing);
+        }
+        document.querySelectorAll('.breadcrumb a').forEach((a) => {
+          const t = decodePath(a.getAttribute('href') || '').split('?')[0].replace(/\/$/, '');
+          const inScope = (shareTopic && t === '/topics/' + shareTopic)
+            || (shareProject && t === '/projects/' + shareProject);
+          if (!inScope) a.replaceWith(document.createTextNode(a.textContent || ''));
+        });
         /* 相关文档：只保留指向模块内文档的链接 */
         const allowed = new Set(ctx.docs.map((d) => decodePath(d.url).replace(/\/$/, '')));
         document.querySelectorAll('.related-block .meta-links a').forEach((a) => {
