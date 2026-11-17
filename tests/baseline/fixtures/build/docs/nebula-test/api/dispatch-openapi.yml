@@ -1,0 +1,13 @@
+openapi: 3.0.3
+info:
+  title: Nebula synthetic dispatch API
+  version: 2.0.0
+servers:
+  - url: https://nebula-build-fixture.invalid
+paths:
+  /dispatch:
+    get:
+      summary: Read a synthetic dispatch signal
+      responses:
+        '200':
+          description: A fictitious signal

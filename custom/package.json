@@ -4,7 +4,8 @@
   "description": "",
   "main": "index.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1",
+    "test": "python -B ../tests/baseline/run.py",
+    "test:build": "python -B ../tests/baseline/build_site.py",
     "build": "python3 scripts/sync_files.py && python3 scripts/gen_site_content.py && astro build && pagefind --site dist",
     "build:win": "python scripts/sync_files.py && python scripts/gen_site_content.py && astro build && pagefind --site dist"
   },

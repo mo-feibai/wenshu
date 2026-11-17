@@ -4,14 +4,47 @@ on:
   push:
     branches: [main]
   pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
 
 jobs:
-  static:
-    runs-on: ubuntu-latest
+  isolated-baseline:
+    name: Isolated baseline (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    env:
+      PYTHONDONTWRITEBYTECODE: "1"
+      WENSHU_TEST_TMPDIR: ${{ runner.temp }}/wenshu-test-scratch
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
-      - name: Static checks (syntax / json / secrets)
-        run: python custom/tests/static_check.py
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24.11.0"
+      - name: Create isolated scratch parent
+        run: python -c "import os; from pathlib import Path; Path(os.environ['WENSHU_TEST_TMPDIR']).mkdir(parents=True, exist_ok=True)"
+      - name: Static checks without runtime-state reads
+        run: python -B custom/tests/static_check.py
+      - name: Explicit compatibility and known-gap baseline
+        run: python -B tests/baseline/run.py --report "${{ runner.temp }}/wenshu-baseline.json"
+      - name: Real isolated Astro and Pagefind build
+        run: python -B tests/baseline/build_site.py --report "${{ runner.temp }}/wenshu-build.json"
+      - name: Preserve machine-readable evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: wenshu-validation-${{ matrix.os }}
+          if-no-files-found: warn
+          path: |
+            ${{ runner.temp }}/wenshu-baseline.json
+            ${{ runner.temp }}/wenshu-build.json

@@ -49,6 +49,15 @@ s3_verify.sh
 s3_verify2.sh
 deploy_admin2.sh
 
+# 隔离测试的本地临时命名空间（真实文档库不使用此目录）
+tests/.baseline-tmp/
+
+# Only these synthetic test assets belong in CI; real assets stay ignored.
+!tests/baseline/fixtures/build/docs/nebula-test/assets/
+tests/baseline/fixtures/build/docs/nebula-test/assets/*
+!tests/baseline/fixtures/build/docs/nebula-test/assets/dispatch-diagram.svg
+!tests/baseline/fixtures/build/docs/nebula-test/assets/not-listed.txt
+
 # 编辑器/系统
 .DS_Store
 Thumbs.db

@@ -1,0 +1,309 @@
+{
+  "description": "Independent literal expectations for fictitious Nebula fixtures; never generated from the application parser.",
+  "static_assets": [
+    "favicon.svg", "logo.svg", "swagger/index.html",
+    "vendor/swagger-ui/swagger-ui.css", "vendor/swagger-ui/swagger-ui-bundle.js",
+    "fonts/MapleMono-CN-Regular.woff2", "fonts/MapleMono-CN-SemiBold.woff2", "fonts/MapleMono-CN-Bold.woff2"
+  ],
+  "swagger_references": ["/vendor/swagger-ui/swagger-ui.css", "/vendor/swagger-ui/swagger-ui-bundle.js"],
+  "swagger_paths": ["/openapi/spec.yml", "/fonts/MapleMono-CN-Regular.woff2", "/fonts/MapleMono-CN-SemiBold.woff2", "/fonts/MapleMono-CN-Bold.woff2"],
+  "search_entries": [
+    {"id":"nebula-test/api/dispatch-guide-v1","title":"Nebula dispatch guide (v1)","project":"nebula-test","topic":"Nebula Dispatch","type":"api","status":"implemented","summary":"A wholly fictitious dispatch contract for isolated build validation.","url":"/docs/nebula-test/api/dispatch-guide-v1/"},
+    {"id":"nebula-test/api/dispatch-guide-v2","title":"Nebula dispatch guide (v2)","project":"nebula-test","topic":"Nebula Dispatch","type":"api","status":"pending","summary":"Synthetic dispatch revision with a pending implementation.","url":"/docs/nebula-test/api/dispatch-guide-v2/"},
+    {"id":"nebula-test/api/dispatch-openapi","title":"Nebula OpenAPI reference","project":"nebula-test","topic":"Nebula Dispatch","type":"openapi","status":"pending","summary":"A fictional OpenAPI reference with a raw spec download.","url":"/docs/nebula-test/api/dispatch-openapi/"},
+    {"id":"nebula-test/sql/migration-ledger","title":"Nebula ledger migration","project":"nebula-test","topic":"Nebula Dispatch","type":"sql","status":"pending","summary":"","url":"/docs/nebula-test/sql/migration-ledger/"}
+  ],
+  "pagefind": {"version":"1.5.2","minimum_pages":4},
+  "downloads": [
+    {"path": "files/dispatch-guide-v1.md", "source": "docs/nebula-test/api/dispatch-guide-v1.md"},
+    {"path": "files/dispatch-guide-v2.md", "source": "docs/nebula-test/api/dispatch-guide-v2.md"},
+    {"path": "files/api__dispatch-openapi.md", "source": "docs/nebula-test/api/dispatch-openapi.md"},
+    {"path": "files/api__dispatch-openapi.yml", "source": "docs/nebula-test/api/dispatch-openapi.yml"},
+    {"path": "files/migration-ledger.sql", "source": "docs/nebula-test/sql/migration-ledger.sql"},
+    {"path": "files/dispatch-diagram.svg", "source": "docs/nebula-test/assets/dispatch-diagram.svg"},
+    {"path": "openapi/spec.yml", "source": "public/openapi/spec.yml"}
+  ],
+  "download_allowlist": [
+    "dispatch-guide-v1.md", "dispatch-guide-v2.md", "api__dispatch-openapi.md",
+    "api__dispatch-openapi.yml", "migration-ledger.sql", "dispatch-diagram.svg"
+  ],
+  "pages": [
+    {
+      "path": "index.html",
+      "heading": "文枢",
+      "texts": [
+        "4 篇文档",
+        "1 个主题",
+        "3 个待办",
+        "待执行 SQL",
+        "待实现接口"
+      ],
+      "links": [
+        {
+          "href": "/docs/nebula-test/api/dispatch-guide-v1/",
+          "text": "Nebula dispatch guide (v1)"
+        },
+        {
+          "href": "/docs/nebula-test/api/dispatch-guide-v2/",
+          "text": "Nebula dispatch guide (v2)"
+        },
+        {
+          "href": "/docs/nebula-test/api/dispatch-openapi/",
+          "text": "Nebula OpenAPI reference"
+        },
+        {
+          "href": "/docs/nebula-test/sql/migration-ledger/",
+          "text": "Nebula ledger migration"
+        },
+        {
+          "href": "/projects/nebula-test/",
+          "text": "nebula-test"
+        },
+        {
+          "href": "/topics/Nebula%20Dispatch/",
+          "text": "Nebula Dispatch"
+        },
+        {
+          "href": "/pending/",
+          "text": "待办看板"
+        }
+      ]
+    },
+    {
+      "path": "projects/nebula-test/index.html",
+      "heading": "nebula-test",
+      "texts": [
+        "当前版 3",
+        "历史版 1"
+      ],
+      "links": [
+        {
+          "href": "/docs/nebula-test/api/dispatch-guide-v1/",
+          "text": "Nebula dispatch guide (v1)"
+        },
+        {
+          "href": "/docs/nebula-test/api/dispatch-guide-v2/",
+          "text": "Nebula dispatch guide (v2)"
+        },
+        {
+          "href": "/docs/nebula-test/api/dispatch-openapi/",
+          "text": "Nebula OpenAPI reference"
+        },
+        {
+          "href": "/docs/nebula-test/sql/migration-ledger/",
+          "text": "Nebula ledger migration"
+        }
+      ]
+    },
+    {
+      "path": "topics/Nebula Dispatch/index.html",
+      "heading": "Nebula Dispatch",
+      "texts": [
+        "4 篇文档",
+        "3 项待办",
+        "v1",
+        "v2"
+      ],
+      "links": [
+        {
+          "href": "/docs/nebula-test/api/dispatch-guide-v1/",
+          "text": "Nebula dispatch guide (v1)"
+        },
+        {
+          "href": "/docs/nebula-test/api/dispatch-guide-v2/",
+          "text": "Nebula dispatch guide (v2)"
+        },
+        {
+          "href": "/docs/nebula-test/api/dispatch-openapi/",
+          "text": "Nebula OpenAPI reference"
+        },
+        {
+          "href": "/docs/nebula-test/sql/migration-ledger/",
+          "text": "Nebula ledger migration"
+        },
+        {
+          "href": "/files/dispatch-diagram.svg",
+          "text": "dispatch-diagram.svg"
+        }
+      ]
+    },
+    {
+      "path": "pending/index.html",
+      "heading": "待办看板",
+      "texts": [
+        "全部 3",
+        "待执行 SQL 1",
+        "待实现接口 2",
+        "待处理"
+      ],
+      "links": [
+        {
+          "href": "/docs/nebula-test/api/dispatch-guide-v2/",
+          "text": "Nebula dispatch guide (v2)"
+        },
+        {
+          "href": "/docs/nebula-test/api/dispatch-openapi/",
+          "text": "Nebula OpenAPI reference"
+        },
+        {
+          "href": "/docs/nebula-test/sql/migration-ledger/",
+          "text": "Nebula ledger migration"
+        }
+      ],
+      "absent_links": [
+        "/docs/nebula-test/api/dispatch-guide-v1/"
+      ]
+    },
+    {
+      "path": "docs/nebula-test/api/dispatch-guide-v1/index.html",
+      "heading": "Nebula dispatch guide (v1)",
+      "texts": [
+        "已实现",
+        "API",
+        "v1",
+        "版本链",
+        "NEBULA_BUILD_FIXTURE_V1",
+        "此版本已被新版替代"
+      ],
+      "links": [
+        {
+          "href": "/projects/nebula-test/",
+          "text": "nebula-test"
+        },
+        {
+          "href": "/topics/Nebula%20Dispatch/",
+          "text": "Nebula Dispatch"
+        },
+        {
+          "href": "/docs/nebula-test/api/dispatch-guide-v2/",
+          "text": "Nebula dispatch guide (v2)"
+        },
+        {
+          "href": "/docs/nebula-test/api/dispatch-guide-v1/",
+          "text": "v1"
+        },
+        {
+          "href": "/docs/nebula-test/api/dispatch-guide-v2/",
+          "text": "v2"
+        },
+        {
+          "href": "/files/dispatch-guide-v1.md",
+          "text": "下载 Markdown"
+        }
+      ]
+    },
+    {
+      "path": "docs/nebula-test/api/dispatch-guide-v2/index.html",
+      "heading": "Nebula dispatch guide (v2)",
+      "texts": [
+        "待处理",
+        "API",
+        "v2",
+        "版本链",
+        "NEBULA_BUILD_FIXTURE_V2",
+        "本版替代旧版"
+      ],
+      "links": [
+        {
+          "href": "/projects/nebula-test/",
+          "text": "nebula-test"
+        },
+        {
+          "href": "/topics/Nebula%20Dispatch/",
+          "text": "Nebula Dispatch"
+        },
+        {
+          "href": "/docs/nebula-test/api/dispatch-guide-v1/",
+          "text": "Nebula dispatch guide (v1)"
+        },
+        {
+          "href": "/docs/nebula-test/api/dispatch-guide-v1/",
+          "text": "v1"
+        },
+        {
+          "href": "/docs/nebula-test/api/dispatch-guide-v2/",
+          "text": "v2"
+        },
+        {
+          "href": "/docs/nebula-test/sql/migration-ledger/",
+          "text": "Nebula ledger migration"
+        },
+        {
+          "href": "/docs/nebula-test/api/dispatch-openapi/",
+          "text": "Nebula OpenAPI reference"
+        },
+        {
+          "href": "/files/dispatch-guide-v2.md",
+          "text": "下载 Markdown"
+        },
+        {
+          "href": "/files/api__dispatch-openapi.yml",
+          "text": "dispatch-openapi.yml"
+        },
+        {
+          "href": "/files/dispatch-diagram.svg",
+          "text": "dispatch-diagram.svg"
+        }
+      ]
+    },
+    {
+      "path": "docs/nebula-test/api/dispatch-openapi/index.html",
+      "heading": "Nebula OpenAPI reference",
+      "texts": [
+        "待处理",
+        "OpenAPI",
+        "NEBULA_OPENAPI_REFERENCE"
+      ],
+      "links": [
+        {
+          "href": "/projects/nebula-test/",
+          "text": "nebula-test"
+        },
+        {
+          "href": "/topics/Nebula%20Dispatch/",
+          "text": "Nebula Dispatch"
+        },
+        {
+          "href": "/docs/nebula-test/api/dispatch-guide-v2/",
+          "text": "Nebula dispatch guide (v2)"
+        },
+        {
+          "href": "/files/api__dispatch-openapi.md",
+          "text": "下载 Markdown"
+        },
+        {
+          "href": "/files/api__dispatch-openapi.yml",
+          "text": "dispatch-openapi.yml"
+        }
+      ]
+    },
+    {
+      "path": "docs/nebula-test/sql/migration-ledger/index.html",
+      "heading": "Nebula ledger migration",
+      "texts": [
+        "待处理",
+        "SQL",
+        "NEBULA_SQL_FIXTURE",
+        "nebula_fixture_ledger"
+      ],
+      "links": [
+        {
+          "href": "/projects/nebula-test/",
+          "text": "nebula-test"
+        },
+        {
+          "href": "/topics/Nebula%20Dispatch/",
+          "text": "Nebula Dispatch"
+        },
+        {
+          "href": "/docs/nebula-test/api/dispatch-guide-v2/",
+          "text": "Nebula dispatch guide (v2)"
+        },
+        {
+          "href": "/files/migration-ledger.sql",
+          "text": "下载原始脚本"
+        }
+      ]
+    }
+  ]
+}

@@ -145,7 +145,23 @@ def purge_expired():
 def safe_next(value: str) -> str:
     if not value.startswith("/") or value.startswith("//"):
         return "/"
+    # 浏览器会把反斜杠、制表符/换行与其它控制字符归一化：/\evil.example 会变成
+    # https://evil.example/，等于把登录后的跳转变成开放重定向。这类值一律回落到站点根。
+    if any(ch in "\\\t\r\n" or ord(ch) < 0x20 or ord(ch) == 0x7f for ch in value):
+        return "/"
     return value
+
+
+def doc_path_segment(value: str, label: str) -> str:
+    """文档库内的相对路径段：拒绝绝对路径、盘符、上级目录与空段，避免写出 DOCS。"""
+    text = value.strip()
+    if not text:
+        raise ApiError(400, label + " 不能为空")
+    if text.startswith(("/", "\\")) or re.match(r"^[A-Za-z]:", text):
+        raise ApiError(400, label + " 必须是文档库内的相对路径")
+    if any(part in (".", "..") for part in re.split(r"[\\/]+", text)):
+        raise ApiError(400, label + " 不能包含上级目录或点路径段")
+    return text
 
 
 def extract_doc_files(target_path: str):
@@ -1243,6 +1259,15 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         sid = self.cookies().get("ws_sid")
         return bool(sid and sessions.get(sid, 0) > now_ts())
 
+    def revoke_session(self):
+        """注销必须让已复制的会话 ID 立即失效，而不只是清掉浏览器 Cookie。"""
+        sid = self.cookies().get("ws_sid")
+        if not sid:
+            return
+        with lock:
+            if sessions.pop(sid, None) is not None:
+                save_sessions()
+
     def share_tokens(self):
         """cookie 里可能同时持有多个分享 token（逗号分隔，向后兼容旧的单值）。"""
         raw = self.cookies().get("ws_share") or ""
@@ -1305,6 +1330,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def redirect(self, location, code=303):
         self.send_response(code)
+        # HTTP 头只能是 latin-1：非 ASCII 的跳转目标（如中文文档路径）先按 URL 规则转义，
+        # 否则编码头部时会抛异常并直接断连，浏览器拿不到任何响应。
+        try:
+            location.encode("latin-1")
+        except UnicodeEncodeError:
+            location = urllib.parse.quote(location, safe="/?&=#%:+~")
         self.send_header("Location", location)
         self.send_header("Content-Length", "0")
         self.end_headers()
@@ -1329,7 +1360,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def notice_page(self, title, lines, foot="文枢 · 分享链接", code=200, link=None, links=None):
+    def notice_page(self, title, lines, foot="文枢 · 分享链接", code=200, link=None, links=None, head=False):
         body = "".join(f"<p>{escape(t)}</p>" for t in lines)
         for text, href in ([link] if link else []) + list(links or []):
             body += f'<a class="btn" href="{escape(href, quote=True)}">{escape(text)}</a>'
@@ -1341,31 +1372,33 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
-        self.wfile.write(data)
+        # HEAD 只发头部：写正文会让复用连接上的下一个响应错位。
+        if not head:
+            self.wfile.write(data)
 
-    def share_invalid_page(self, token):
+    def share_invalid_page(self, token, head=False):
         """分享链接不可用的四种原因，给出可区分的文案。"""
         item = shares.get(token)
         if item is None:
             return self.notice_page(
                 "分享链接无效",
                 ["这个链接不存在，或已被分享者删除。", "请向分享者索取新的链接。"],
-                link=("重新登录站点", "/login"))
+                link=("重新登录站点", "/login"), head=head)
         if item.get("revoked_at"):
             stamp = datetime.datetime.fromtimestamp(float(item["revoked_at"])).strftime("%Y-%m-%d %H:%M")
             return self.notice_page(
                 "分享已被撤销",
                 ["分享者已主动撤销这份分享，链接即刻失效。", f"撤销时间：{stamp}"],
-                link=("重新登录站点", "/login"))
+                link=("重新登录站点", "/login"), head=head)
         if item.get("expires", 0) <= now_ts():
             stamp = datetime.datetime.fromtimestamp(float(item.get("expires", 0))).strftime("%Y-%m-%d %H:%M")
             return self.notice_page(
                 "分享已过期",
                 [f"这份分享的有效期已于 {stamp} 结束。", "如仍需查看，请向分享者申请延长。"],
-                link=("重新登录站点", "/login"))
-        return self.notice_page("分享不可用", ["链接状态异常，请向分享者索取新链接。"])
+                link=("重新登录站点", "/login"), head=head)
+        return self.notice_page("分享不可用", ["链接状态异常，请向分享者索取新链接。"], head=head)
 
-    def share_no_token_page(self):
+    def share_no_token_page(self, head=False):
         """访客带着 ?share=1 直接打开文档深链、但从未经入口拿到凭证。
 
         跳登录页会让人以为站点要密码（实测中最常见的困惑来源），这里给出可理解的说明。
@@ -1375,9 +1408,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             ["这份分享的凭证只在分享入口链接首次打开时下发一次。",
              "你打开的是文档地址（地址里只有 ?share=1，它只是访客视图标志，不是凭证）。",
              "请向分享者索取以 /s/ 开头的分享入口链接，从那里进入即可看到全部内容。"],
-            link=("重新登录站点", "/login"))
+            link=("重新登录站点", "/login"), head=head)
 
-    def share_denied_page(self, reason, item=None):
+    def share_denied_page(self, reason, item=None, head=False):
         # 「返回分享首页」应回到这份分享自己的落地页（单篇=文档页，模块=主题页），
         # 并额外给出「以站点密码登录」出口，避免站点主人被卡死在这页。
         home = "/"
@@ -1390,7 +1423,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return self.notice_page(
             "该分享不包含此内容",
             [reason, "这份分享只覆盖被分享者开放的那部分文档。"],
-            links=[("返回分享首页", home), ("以站点密码登录", nxt)])
+            links=[("返回分享首页", home), ("以站点密码登录", nxt)], head=head)
 
     # ---------- 分享 API（凭 ws_share cookie 鉴权） ----------
     def _pick_share(self, qs):
@@ -1629,6 +1662,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         t0 = time.monotonic()
         with WRITE_LOCK:
             entries = read_entries()
+            # 回滚要能撤销本次新建：先记下改动前的文件与目录集合。
+            before_files = {p for p in DOCS.rglob("*") if p.is_file()} if DOCS.exists() else set()
+            before_dirs = {p for p in DOCS.rglob("*") if p.is_dir()} if DOCS.exists() else set()
             try:
                 info = mutate(entries)
             except ApiError as exc:
@@ -1646,18 +1682,49 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     except OSError:
                         pass
                 run_git(["checkout", "--", "."])
+                # checkout 只还原已跟踪文件；本次新建的未跟踪文件必须显式删除，
+                # 否则「已回滚」是假的，文档库里会留下构建失败的新文档。
+                for created in sorted(p for p in (DOCS.rglob("*") if DOCS.exists() else [])
+                                      if p.is_file() and p not in before_files):
+                    try:
+                        created.unlink()
+                    except OSError:
+                        pass
+                for created_dir in sorted((p for p in (DOCS.rglob("*") if DOCS.exists() else [])
+                                           if p.is_dir() and p not in before_dirs),
+                                          key=lambda p: len(p.parts), reverse=True):
+                    try:
+                        created_dir.rmdir()
+                    except OSError:
+                        pass
                 log_line(f"write FAILED (build) in {time.monotonic() - t0:.1f}s | " + tail.replace("\n", " ⏎ ")[:600])
                 return self.json_response(500, {"error": "构建失败，已回滚（改动已存入 build-failed-rescue.patch）", "detail": tail})
             msg = info.pop("commit_message", "chore: wenshu api update")
-            run_git(["add", "-A"])
-            code, _, _ = run_git(["commit", "-m", msg])
+            add_code, _, add_err = run_git(["add", "-A"])
+            if add_code != 0:
+                # 版本控制失败不能报成功：改动已落盘并构建，但没有提交。
+                invalidate_snapshot()
+                log_line(f"write FAILED (git add) in {time.monotonic() - t0:.1f}s | "
+                         + (add_err or "").replace("\n", " ⏎ ")[:600])
+                return self.json_response(500, {
+                    "error": "Git add 失败：改动已写入文档库并完成构建，但未提交",
+                    "detail": add_err or "git add failed"})
+            code, _, commit_err = run_git(["commit", "-m", msg])
+            if code != 0:
+                # 版本控制失败不能报成功：改动已落盘并构建，但没有提交。
+                invalidate_snapshot()
+                log_line(f"write FAILED (git commit) in {time.monotonic() - t0:.1f}s | "
+                         + (commit_err or "").replace("\n", " ⏎ ")[:600])
+                return self.json_response(500, {
+                    "error": "Git commit 失败：改动已写入文档库并完成构建，但未提交",
+                    "detail": commit_err or "git commit failed"})
             _, commit, _ = run_git(["rev-parse", "--short", "HEAD"])
             invalidate_snapshot()
             global _URL_MAP
             _URL_MAP = build_url_map()
             if isinstance(info, dict) and info.get("id") and "url" in info:
                 info["url"] = doc_url(str(info["id"]))
-            info.update({"ok": True, "built": True, "commit": commit if code == 0 else ""})
+            info.update({"ok": True, "built": True, "commit": commit})
             log_line(f"write ok in {time.monotonic() - t0:.1f}s commit={commit or '-'} :: {msg}")
             return self.json_response(200, info)
 
@@ -1704,7 +1771,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 raise ApiError(400, "title 必填")
             if not content.strip():
                 raise ApiError(400, "content 必填")
+            project = doc_path_segment(project, "project")
             domain = str(payload.get("domain", "")).strip()
+            if domain:
+                domain = doc_path_segment(domain, "domain")
             status = str(payload.get("status", DEFAULT_STATUS[dtype])).strip()
             if status not in STATUS_SETS[dtype]:
                 raise ApiError(400, f"{dtype} 的状态只能是 {STATUS_SETS[dtype]}")
@@ -1735,7 +1805,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 fname = re.sub(r'[\\/:*?"<>|]', "-", title)
                 if not fname.endswith(".md"):
                     fname += ".md"
+            fname = doc_path_segment(fname, "filename")
             path = target_dir / fname
+            try:
+                path.relative_to(DOCS)
+            except ValueError:
+                raise ApiError(400, "文档路径必须位于文档库内")
             if path.exists():
                 raise ApiError(409, "文件已存在: " + path.relative_to(DOCS).as_posix())
             head = {"title": path.stem if dtype == "sql" else title, "project": project}
@@ -1908,7 +1983,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     raise ApiError(400, "changes 必须是非空数组")
             if not fields and changes is None:
                 raise ApiError(400, "没有可更新的字段（topic/domain/summary/related/title/type/changes）")
-            done = []
+            resolved = []
             for doc_id in targets:
                 entry = find_entry(entries, doc_id)
                 if not entry:
@@ -1919,9 +1994,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     st = str(entry["meta"].get("status") or "").strip()
                     if st and st not in STATUS_SETS[fields["type"]]:
                         raise ApiError(400, f"{doc_id} 当前状态 {st} 不适用于类型 {fields['type']}，请先切换状态")
+                if changes is not None and entry["kind"] != "md":
+                    raise ApiError(400, "changes 仅支持 md 文档")
+                resolved.append(entry)
+            # 全部目标先校验、再落盘：后项无效时前项保持原样。
+            done = []
+            for entry in resolved:
                 if changes is not None:
-                    if entry["kind"] != "md":
-                        raise ApiError(400, "changes 仅支持 md 文档")
                     cl = [str(c).strip() for c in changes if str(c).strip()]
                     meta, rest = parse_md(entry["text"])
                     meta.update(fields)
@@ -2228,6 +2307,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         if path == "/login":
             return self.login_page()
         if path == "/logout":
+            self.revoke_session()
             self.queue_cookie("ws_sid", "", 0)
             self.queue_cookie("ws_share", "", 0)
             return self.redirect("/login")
@@ -2265,8 +2345,24 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if not self.is_authed():
                 return self.json_response(401, {"error": "未登录"})
             return self.admin_review(qs)
+        # 授权与静态读取使用同一套解码、路径归一化和平台路径段过滤。
+        if not self.static_gate(qs):
+            return
+        return super().do_GET()
+
+    def static_gate(self, qs, head=False):
+        """GET 与 HEAD 共用的一道静态授权门禁。
+
+        返回 True 表示请求已获准交给静态文件处理器；False 表示本方法已自行应答。
+        HEAD 复用同一套判定与同一批页面，只是不写正文，避免两条路径的判断分叉。
+        """
+        path, in_scope = self.static_scope()
+        if not in_scope:
+            # 词法在站点内、真实路径却跑出站点根（目录联接/符号链接）：不服务。
+            self.send_error(404)
+            return False
         if self.is_authed() or path in PUBLIC_FILES or any(path.startswith(p) for p in PUBLIC_PREFIXES):
-            return super().do_GET()
+            return True
         grants = self.share_grants()
         if grants:
             reasons = [self.grant_denial(g, path) for g in grants]
@@ -2281,24 +2377,51 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                              urllib.parse.parse_qsl(sp.query, keep_blank_values=True)
                              if k != "share"]
                     pairs.append(("share", "1"))
-                    return self.redirect(sp.path + "?" + urllib.parse.urlencode(pairs))
-                return super().do_GET()
+                    self.redirect(sp.path + "?" + urllib.parse.urlencode(pairs))
+                    return False
+                return True
             # 站点外壳页（根目录、主题、看板等）不属于任何分享，但站点主人日常要访问：
             # 回退到登录跳转而不是「无权页」，否则打开站点根会像坏掉一样。
             # 注意：无法区分「纯访客」与「曾登录但 session 过期的站点主人」，两者都带 ws_share
             # cookie，所以这里一律跳登录；访客点不到越界入口的问题由前端消除入口来解决。
             if not (path.startswith("/docs/") or path.startswith("/files/")):
-                return self.redirect("/login?next=" + urllib.parse.quote(self.path))
+                self.redirect("/login?next=" + urllib.parse.quote(self.path))
+                return False
             denied_item = next((g for g in grants if g is not None), grants[0])
-            return self.share_denied_page(reasons[0], denied_item)
+            self.share_denied_page(reasons[0], denied_item, head=head)
+            return False
         # 曾经持有分享但现已全部失效（过期/撤销）→ 给失效说明页，而不是让人误以为需要密码
         for token in self.share_tokens():
             if token in shares:
-                return self.share_invalid_page(token)
+                self.share_invalid_page(token, head=head)
+                return False
         # 从未拿到凭证的访客深链（?share=1 只是访客视图标志，不是凭证）→ 说明页而非登录页
         if qs.get("share", [""])[0] == "1":
-            return self.share_no_token_page()
-        return self.redirect("/login?next=" + urllib.parse.quote(self.path))
+            self.share_no_token_page(head=head)
+            return False
+        self.redirect("/login?next=" + urllib.parse.quote(self.path))
+        return False
+
+    def static_scope(self):
+        """把请求映射成站点内路径；真实路径越出站点根时 in_scope 为 False。"""
+        translated_path = self.translate_path(self.path)
+        root = pathlib.Path(self.directory).resolve()
+        if not pathlib.Path(os.path.realpath(translated_path)).is_relative_to(root):
+            return None, False
+        relative_path = pathlib.Path(translated_path).relative_to(self.directory).as_posix()
+        path = "/" if relative_path == "." else "/" + relative_path
+        if translated_path.endswith("/") and not path.endswith("/"):
+            path += "/"
+        return path, True
+
+    def do_HEAD(self):
+        """HEAD 是 GET 的投影：同一道门禁、同一套状态码，只是不写正文。"""
+        purge_expired()
+        parsed = urllib.parse.urlparse(self.path)
+        qs = urllib.parse.parse_qs(parsed.query)
+        if not self.static_gate(qs, head=True):
+            return
+        return super().do_HEAD()
 
     def consume_share(self, token):
         item = shares.get(token)

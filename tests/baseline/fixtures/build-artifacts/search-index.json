@@ -1,0 +1,6 @@
+[
+ {"id":"nebula-test/api/dispatch-guide-v1","title":"Nebula dispatch guide (v1)","project":"nebula-test","topic":"Nebula Dispatch","type":"api","status":"implemented","summary":"A wholly fictitious dispatch contract for isolated build validation.","url":"/docs/nebula-test/api/dispatch-guide-v1/"},
+ {"id":"nebula-test/api/dispatch-guide-v2","title":"Nebula dispatch guide (v2)","project":"nebula-test","topic":"Nebula Dispatch","type":"api","status":"pending","summary":"Synthetic dispatch revision with a pending implementation.","url":"/docs/nebula-test/api/dispatch-guide-v2/"},
+ {"id":"nebula-test/api/dispatch-openapi","title":"Nebula OpenAPI reference","project":"nebula-test","topic":"Nebula Dispatch","type":"openapi","status":"pending","summary":"A fictional OpenAPI reference with a raw spec download.","url":"/docs/nebula-test/api/dispatch-openapi/"},
+ {"id":"nebula-test/sql/migration-ledger","title":"Nebula ledger migration","project":"nebula-test","topic":"Nebula Dispatch","type":"sql","status":"pending","summary":"","url":"/docs/nebula-test/sql/migration-ledger/"}
+]
