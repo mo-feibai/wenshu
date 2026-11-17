@@ -20,7 +20,6 @@ jobs:
         os: [ubuntu-latest, windows-latest]
     env:
       PYTHONDONTWRITEBYTECODE: "1"
-      WENSHU_TEST_TMPDIR: ${{ runner.temp }}/wenshu-test-scratch
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,13 +30,21 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "24.11.0"
+      # runner 上下文只在 step 级可用；写进 job 级 env 会让整个工作流被判为非法文件。
+      # 因此把临时根显式落到每个需要的 step 上。
       - name: Create isolated scratch parent
+        env:
+          WENSHU_TEST_TMPDIR: ${{ runner.temp }}/wenshu-test-scratch
         run: python -c "import os; from pathlib import Path; Path(os.environ['WENSHU_TEST_TMPDIR']).mkdir(parents=True, exist_ok=True)"
       - name: Static checks without runtime-state reads
         run: python -B custom/tests/static_check.py
       - name: Explicit compatibility and known-gap baseline
+        env:
+          WENSHU_TEST_TMPDIR: ${{ runner.temp }}/wenshu-test-scratch
         run: python -B tests/baseline/run.py --report "${{ runner.temp }}/wenshu-baseline.json"
       - name: Real isolated Astro and Pagefind build
+        env:
+          WENSHU_TEST_TMPDIR: ${{ runner.temp }}/wenshu-test-scratch
         run: python -B tests/baseline/build_site.py --report "${{ runner.temp }}/wenshu-build.json"
       - name: Preserve machine-readable evidence
         if: always()
