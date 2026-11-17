@@ -44,7 +44,7 @@ python -B tests/baseline/build_site.py
 
 两个 CLI 都接受 `--report <临时目录中的新文件>`：父目录须已存在，临时位置校验在运行前及发布时执行，使用独占创建，不覆盖既有文件、不创建任意父目录、不写入源应用。基线报告为 UTF-8 JSON，包含状态、运行数、失败/错误/跳过、预期失败、覆盖和每个缺陷的观察记录。基线 CLI 标准输出仅给出 JSON，测试诊断保留在标准错误；构建 CLI 保留真实工具输出并给出结构化结果。
 
-[CI](<../.github/workflows/ci.yml>) 在 Windows / Linux 分别运行静态检查、显式基线和真实隔离构建，保存已生成的 JSON；前置步骤阻断时后续构建不运行，不保证两份报告都存在。配置工作流不等于 GitHub 已实际执行；以对应运行记录与 artifact 为准。
+[CI](<../.github/workflows/ci.yml>) 在 Windows / Linux 分别运行静态检查、显式基线和真实隔离构建，保存已生成的 JSON；前置步骤阻断时后续构建不运行，不保证两份报告都存在。该工作流已于 2026-11-17 在 GitHub Actions 实际执行通过（run 44044221090，ubuntu-latest 与 windows-latest 两个 job 均为 success，含真实 Astro/Pagefind 构建）；临时根通过 step 级 `WENSHU_TEST_TMPDIR` 指向 `runner.temp`，`runner` 上下文写进 job 级 env 会让整份工作流被判非法。新增或修改工作流后仍以对应运行记录与 artifact 为准。
 
 ## 4. 八项普通安全回归、三项读取与跳转加固与当前零项登记
 
