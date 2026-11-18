@@ -31,7 +31,7 @@ jobs:
         with:
           node-version: "24.11.0"
       - name: DSH plugin guard tests
-        run: node --test dsh/test/
+        run: node dsh/test/guard.test.mjs
       # runner 上下文只在 step 级可用；写进 job 级 env 会让整个工作流被判为非法文件。
       # 因此把临时根显式落到每个需要的 step 上。
       - name: Create isolated scratch parent
