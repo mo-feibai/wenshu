@@ -15,6 +15,14 @@ import time
 import urllib.parse
 from html import escape
 
+try:                       # 语义检索（可选能力）：模块缺失或损坏都不得影响主服务
+    import embed_index
+except Exception as _embed_exc:                            # noqa: BLE001
+    embed_index = None
+    _EMBED_ERR = _embed_exc
+else:
+    _EMBED_ERR = None
+
 BASE = pathlib.Path(__file__).resolve().parent
 ROOT = BASE / "dist"
 CONFIG_PATH = BASE / "server_config.json"
@@ -1695,6 +1703,79 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         active = [i for i in items if not i.get("lifecycle")]
         return self.json_response(200, {"count": len(items), "active": active, "stale": stale})
 
+    # ---------- 语义检索（本地嵌入模型；只读，不改变任何既有行为） ----------
+
+    def _semantic_ready(self):
+        """返回 (是否可用, 说明)。任何异常都降级为「不可用」并说明原因。"""
+        if embed_index is None:
+            return False, f"embed_index 不可用: {_EMBED_ERR}"
+        try:
+            ok, why = embed_index.health()
+            if not ok:
+                return False, f"嵌入服务不可用: {why}"
+            st = embed_index.stats()
+            if not st.get("ready"):
+                return False, "索引尚未建立（服务端执行 python3 embed_index.py build）"
+            return True, st
+        except Exception as exc:                               # noqa: BLE001
+            return False, f"{type(exc).__name__}: {exc}"
+
+    def admin_semantic(self, qs):
+        """语义检索（只读）：GET /api/admin/semantic?query=…&k=5&project=&topic=&type=
+
+        与 /api/admin/context 的子串匹配互补——这里按语义相似度召回，能命中「换个说法」的文档。
+        """
+        query = (qs.get("query", [""])[0] or "").strip()
+        if not query:
+            return self.json_response(400, {"error": "缺少 query"})
+        if len(query) > 200:
+            return self.json_response(400, {"error": "query 过长（<=200 字）"})
+        try:
+            k = max(1, min(20, int((qs.get("k", ["5"])[0] or 5))))
+        except ValueError:
+            return self.json_response(400, {"error": "k 必须是整数"})
+        project = (qs.get("project", [""])[0] or "").strip() or None
+        topic = (qs.get("topic", [""])[0] or "").strip() or None
+        dtype = (qs.get("type", [""])[0] or "").strip() or None
+        ready, info = self._semantic_ready()
+        if not ready:
+            return self.json_response(503, {"error": info})
+        t0 = time.monotonic()
+        hits = embed_index.search(query, k=k, project=project, topic=topic, dtype=dtype)
+        for h in hits:
+            h["url"] = doc_url(str(h["id"]))
+        log_line(f"semantic query={query[:40]!r} k={k} hits={len(hits)} in {time.monotonic() - t0:.2f}s")
+        return self.json_response(200, {"query": query, "count": len(hits),
+                                        "model": info.get("model"), "dim": info.get("dim"),
+                                        "took_ms": int((time.monotonic() - t0) * 1000),
+                                        "results": hits})
+
+    def admin_similar(self, qs):
+        """相似文档（只读）：GET /api/admin/similar?id=…&k=5  → related 建议 / 重复内容自查"""
+        doc_id = (qs.get("id", [""])[0] or "").strip()
+        if not doc_id:
+            return self.json_response(400, {"error": "缺少 id"})
+        try:
+            k = max(1, min(20, int((qs.get("k", ["5"])[0] or 5))))
+        except ValueError:
+            return self.json_response(400, {"error": "k 必须是整数"})
+        ready, info = self._semantic_ready()
+        if not ready:
+            return self.json_response(503, {"error": info})
+        entries = read_entries()
+        entry = find_entry(entries, doc_id)
+        if not entry:
+            return self.json_response(404, {"error": "文档不存在: " + doc_id})
+        hits = embed_index.similar(str(entry["id"]), k=k)
+        for h in hits:
+            h["url"] = doc_url(str(h["id"]))
+        own = entry["meta"].get("related") or []
+        if isinstance(own, list):
+            for h in hits:
+                h["already_related"] = any(str(h["id"]).lower() == str(r).lower() for r in own)
+        return self.json_response(200, {"id": entry["id"], "url": doc_url(str(entry["id"])),
+                                        "count": len(hits), "model": info.get("model"), "results": hits})
+
     def admin_context(self, qs):
         entries = read_entries()
         project_f = (qs.get("project", [""])[0] or "").strip()
@@ -1815,6 +1896,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             _URL_MAP = build_url_map()
             if isinstance(info, dict) and info.get("id") and "url" in info:
                 info["url"] = doc_url(str(info["id"]))
+            if embed_index is not None and isinstance(info, dict) and info.get("id"):
+                try:
+                    mode = embed_index.refresh_after_write(read_entries())
+                    if info.pop("_suggest", False):
+                        sug = embed_index.suggest_related(str(info["id"]))
+                        if sug:
+                            info["suggest_related"] = [dict(x, url=doc_url(str(x["id"]))) for x in sug]
+                    if mode and mode != "clean":
+                        log_line(f"semantic index: {mode}")
+                except Exception as exc:                       # noqa: BLE001
+                    log_line(f"semantic index failed: {type(exc).__name__}: {exc}")
             info.update({"ok": True, "built": True, "commit": commit})
             log_line(f"write ok in {time.monotonic() - t0:.1f}s commit={commit or '-'} :: {msg}")
             return self.json_response(200, info)
@@ -1934,7 +2026,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             rel = path.relative_to(DOCS).as_posix()
             doc_id = rel.rsplit(".", 1)[0]
             out = {"id": doc_id, "url": doc_url(doc_id), "path": rel,
-                   "commit_message": f"feat: 新建文档 {doc_id}"}
+                   "commit_message": f"feat: 新建文档 {doc_id}", "_suggest": True}
             if dtype in ("api", "openapi"):
                 out["scaffold"] = scaffolded
                 out["format"] = lint_doc(dtype, text)
@@ -1992,7 +2084,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 new_id = path.relative_to(DOCS).as_posix().rsplit(".", 1)[0]
                 return {"id": new_id, "url": doc_url(new_id),
                         "path": path.relative_to(DOCS).as_posix(), "related": head["related"],
-                        "commit_message": f"feat: 新增迁移 {new_id}"}
+                        "commit_message": f"feat: 新增迁移 {new_id}", "_suggest": True}
             base = re.sub(r"-v\d+$", "", entry["path"].stem)
             old_title = re.sub(r"[（(]\s*v\d+\s*[)）]\s*$", "", str(meta.get("title", "")))
             old_title = re.sub(r"[- ]v\d+\s*$", "", old_title).strip()
@@ -2015,7 +2107,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             save_entry_fields(entry, {"superseded_by": new_id, "status": "archived"})
             out = {"id": new_id, "url": doc_url(new_id),
                    "path": path.relative_to(DOCS).as_posix(), "supersedes": entry["id"],
-                   "commit_message": f"feat: 版本化 {new_id}"}
+                   "commit_message": f"feat: 版本化 {new_id}", "_suggest": True}
             if dtype in ("api", "openapi"):
                 out["format"] = lint_doc(dtype, text)
             return out
@@ -2441,6 +2533,10 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self.admin_pending()
             elif path == "/api/admin/context":
                 self.admin_context(qs)
+            elif path == "/api/admin/semantic":
+                self.admin_semantic(qs)
+            elif path == "/api/admin/similar":
+                self.admin_similar(qs)
             elif path == "/api/admin/doc":
                 self.admin_doc(qs)
             elif path == "/api/admin/review":
