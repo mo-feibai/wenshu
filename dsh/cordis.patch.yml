@@ -1,0 +1,6 @@
+# dsh-wenshu bundle patch：把文枢工具层插入 profile 的插件栈。
+# 只放 id/name 两列（不放 config/inject），这样 dshmarket / plugin_manager 能热挂载与开关；
+# 配置项全部由 index.js 的 Config schema 给默认值。
+- insert:
+    - id: wenshu
+      name: dsh-wenshu

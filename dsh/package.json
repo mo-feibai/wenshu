@@ -1,0 +1,43 @@
+{
+  "name": "dsh-wenshu",
+  "version": "0.1.0",
+  "description": "DeepSeek Harness 的文枢（WenShu）文档库插件：14 个 wenshu_* 工具 + 文档库直写守卫，配合 wenshu skill 使用",
+  "type": "module",
+  "main": "index.js",
+  "private": true,
+  "keywords": [
+    "deepseek-harness",
+    "dsh",
+    "dsh-plugin",
+    "cordis",
+    "wenshu",
+    "documentation"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/mo-feibai/wenshu.git",
+    "directory": "dsh"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    }
+  },
+  "peerDependencies": {
+    "@deepseek-ai/dsh-tools": "*",
+    "@deepseek-ai/schemastery": "*"
+  },
+  "files": [
+    "index.js",
+    "lib",
+    "cordis.patch.yml",
+    "README.md"
+  ],
+  "scripts": {
+    "test": "node --test test/"
+  }
+}

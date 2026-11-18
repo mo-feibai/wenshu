@@ -1,6 +1,6 @@
 # 文枢（WenShu）
 
-文档库驱动的知识站点：以目录结构组织 Markdown / SQL 源文件，构建为带全文搜索、版本差异、状态看板的静态站点，并提供单文件部署的轻量服务（登录、临时分享、Admin API）与 opencode 插件。
+文档库驱动的知识站点：以目录结构组织 Markdown / SQL 源文件，构建为带全文搜索、版本差异、状态看板的静态站点，并提供单文件部署的轻量服务（登录、临时分享、Admin API），以及 opencode / DeepSeek Harness 插件。
 
 > 本仓库不含任何真实业务数据：`sample-docs/` 为虚构示例，用于演示与本地构建。
 
@@ -11,7 +11,7 @@
 - **全文搜索**：构建期生成 pagefind 索引（中文可用）
 - **状态看板**：待执行 SQL（pending）与待实现接口（pending）自动汇总
 - **访问控制**：共享密码登录、单文档临时分享（含附件白名单）
-- **Admin API**：供 opencode 插件写入文档库，自动重建站点并 git 提交
+- **Admin API**：供 opencode / DeepSeek Harness 插件写入文档库，自动重建站点并 git 提交
 - **备份**：systemd timer 每日备份文档库与服务配置（可异地复制）
 
 ## 目录结构
@@ -25,6 +25,7 @@
 | `custom/public/` | 字体、vendor 资源、下载文件输出目录 |
 | `sample-docs/` | 合成示例文档库（虚构内容） |
 | `opencode/` | opencode 插件（`wenshu.ts`）与配置示例 |
+| `dsh/` | DeepSeek Harness 插件（14 个 `wenshu_*` 工具 + 文档库直写守卫） |
 | `deploy_*.sh` / `backup.sh` / `wenshu*.service` / `wenshu-backup.timer` | WSL 部署与备份脚本 |
 | `test_server.py` / `test_admin_api.py` | 服务鉴权/分享与 Admin API 测试 |
 | `make_manifest.py` / `compare_manifest.py` | 目录校验工具（sha256 清单、双端比对） |
@@ -75,6 +76,10 @@ sudo cp /path/to/wenshu.service /etc/systemd/system/ && sudo systemctl enable --
 ### 4. opencode 插件
 
 见 [`opencode/README.md`](opencode/README.md)：将 `wenshu.ts` 放入 `~/.config/opencode/plugins/`，按 `wenshu.example.json` 创建 `~/.config/opencode/wenshu.json`，重启 opencode 即可获得 `wenshu_*` 工具。
+
+### 5. DeepSeek Harness 插件
+
+见 [`dsh/README.md`](dsh/README.md)：`dsh/` 目录本身就是 DSH 插件 bundle（`index.js` + `lib/guard.js` + `cordis.patch.yml`），用 `plugin_manager` 的 `install_bundle` 指向它即可挂载 14 个 `wenshu_*` 工具与文档库写保护守卫。守卫单测：`node dsh/test/guard.test.mjs`。
 
 ## 文档库格式
 
@@ -139,7 +144,7 @@ CREATE TABLE ...
 | `password` | 站点访问密码（必填，无默认值） |
 | `port` | 监听端口，默认 `8903` |
 | `docs_dir` | 文档库目录，默认 `/opt/wenshu/docs` |
-| `api_token` | Admin API 令牌（opencode 插件使用） |
+| `api_token` | Admin API 令牌（opencode / DSH 插件使用） |
 
 ## 环境变量
 
