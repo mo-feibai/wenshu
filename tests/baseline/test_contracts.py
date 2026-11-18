@@ -1124,3 +1124,92 @@ class HTTPContracts(unittest.TestCase):
                 headers=form)
             self.assertEqual(again.status, 303)
             self.assertIsNotNone(again.header("Set-Cookie"))
+
+    def test_create_returns_topic_hints_without_blocking_a_new_topic(self):
+        with ServerSandbox(docs=DOCUMENTS, dist=PAGES) as sandbox:
+            # 主题泛滥的根因是「换个说法就新开一个主题」。这里只给建议：
+            # 相近的已有主题必须出现在 topic_hint 里，但写入绝不能被拒绝。
+            near = {"project": "sample", "topic": "测试主题二", "type": "api",
+                    "title": "近似主题接口", "content": "# 近似主题接口\n合成正文。",
+                    "scaffold": False}
+            got = post_json(sandbox, "/api/admin/create", near, {"X-API-Key": TEST_API_TOKEN})
+            self.assertEqual(got.status, 200, got.body)
+            body = json.loads(got.body.decode("utf-8"))
+            hints = body.get("topic_hint")
+            self.assertIsInstance(hints, list)
+            self.assertTrue(hints, "相近主题必须被推荐")
+            names = [h["topic"] for h in hints]
+            self.assertIn("测试主题", names)
+            top = hints[0]
+            self.assertGreaterEqual(top["count"], 1)
+            self.assertIn("sample", top["projects"])
+            self.assertGreater(top["score"], 0.5)
+
+            fresh = {"project": "sample", "topic": "完全无关的崭新主题", "type": "api",
+                     "title": "崭新主题接口", "content": "# 崭新主题接口\n合成正文。",
+                     "scaffold": False}
+            other = post_json(sandbox, "/api/admin/create", fresh,
+                              {"X-API-Key": TEST_API_TOKEN})
+            self.assertEqual(other.status, 200, other.body)
+            text = (sandbox.docs / json.loads(other.body.decode("utf-8"))["path"]).read_text(
+                encoding="utf-8")
+            self.assertIn("完全无关的崭新主题", text)
+
+    def test_topic_aliases_resolve_on_read_without_renaming_documents(self):
+        with ServerSandbox(docs=DOCUMENTS, dist=PAGES) as sandbox:
+            # 别名表只影响读取：文档 id、路径、frontmatter 里的旧名字都不改，
+            # 删掉 topics.json 就能整体还原。
+            legacy = sandbox.docs / "sample" / "api" / "别名主题接口.md"
+            legacy.write_text(
+                "---\ntitle: 别名主题接口\nproject: sample\ntopic: 测试主题二\n"
+                "type: api\nstatus: implemented\ndate: 2026-01-01\n---\n"
+                "# 别名主题接口\n合成正文。\n", encoding="utf-8")
+            (sandbox.docs / "topics.json").write_text(
+                json.dumps({"测试主题二": "测试主题"}, ensure_ascii=False), encoding="utf-8")
+
+            # 读取侧解析：接口返回正名，但文件内容与 id 都保持原样。
+            got = sandbox.request(
+                "GET", "/api/admin/doc?id=sample/api/%E5%88%AB%E5%90%8D%E4%B8%BB%E9%A2%98%E6%8E%A5%E5%8F%A3",
+                headers={"X-API-Key": TEST_API_TOKEN})
+            self.assertEqual(got.status, 200, got.body)
+            body = json.loads(got.body.decode("utf-8"))
+            self.assertEqual(body.get("topic"), "测试主题")
+            self.assertEqual(body.get("id"), "sample/api/别名主题接口")
+            self.assertIn("测试主题二", legacy.read_text(encoding="utf-8"))
+
+            # 写入侧解析：新建时直接写正名，不产生新的碎片主题。
+            payload = {"project": "sample", "topic": "测试主题二", "type": "api",
+                       "title": "别名主题接口新篇", "content": "# 别名主题接口新篇\n合成正文。",
+                       "scaffold": False}
+            wrote = post_json(sandbox, "/api/admin/create", payload,
+                              {"X-API-Key": TEST_API_TOKEN})
+            self.assertEqual(wrote.status, 200, wrote.body)
+            created = json.loads(wrote.body.decode("utf-8"))
+            text = (sandbox.docs / created["path"]).read_text(encoding="utf-8")
+            self.assertIn('topic: "测试主题"', text)
+            self.assertNotIn("测试主题二", text)
+
+    def test_lint_reports_single_topic_governance_without_blocking_writes(self):
+        with ServerSandbox(docs=DOCUMENTS, dist=PAGES) as sandbox:
+            # 泛滥要被看见，但不能变成写入闸门：lint 只报告，写文档仍然成功。
+            got = sandbox.request("GET", "/api/admin/lint",
+                                  headers={"X-API-Key": TEST_API_TOKEN})
+            self.assertEqual(got.status, 200, got.body)
+            body = json.loads(got.body.decode("utf-8"))
+            topics = body.get("topics")
+            self.assertIsInstance(topics, dict)
+            self.assertEqual(topics.get("threshold"), 5)
+            self.assertEqual(topics.get("total_single_topics"), 1)
+            by_name = {p["project"]: p for p in topics["projects"]}
+            self.assertEqual(by_name["sample"]["topics"], 1)
+            self.assertEqual(by_name["sample"]["documents"], 4)
+            self.assertEqual(by_name["sample"]["single_topics"], 0)
+            self.assertFalse(by_name["sample"]["alert"])
+            self.assertEqual(by_name["other"]["single_topics"], 1)
+            self.assertEqual(by_name["other"]["singles"], ["别的主题"])
+            payload = {"project": "sample", "topic": "别的主题", "type": "api",
+                       "title": "共享别的主题", "content": "# 共享别的主题\n合成正文。",
+                       "scaffold": False}
+            wrote = post_json(sandbox, "/api/admin/create", payload,
+                              {"X-API-Key": TEST_API_TOKEN})
+            self.assertEqual(wrote.status, 200, wrote.body)

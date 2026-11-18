@@ -239,6 +239,36 @@ mark.search-hit.current {
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .dot.pending { background: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft); }
 
+/* 侧栏第三层：领域 → 类型 → 文档。
+   层级顺序刻意和 URL 一致（项目/领域/类型/文件名），
+   这样从地址栏就能推断出侧栏该点哪三下。 */
+.side-domain { margin: 2px 0 6px; }
+.side-domain-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 4px 12px 4px 18px; font-size: 12px; color: var(--faint);
+  letter-spacing: 0.5px;
+}
+.side-domain.active > .side-domain-head { color: var(--accent); }
+.side-domain-name { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
+.side-domain-head .count { font-size: 11px; color: var(--faint); }
+.side-type { margin: 1px 0 3px; }
+.side-type-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 2px 12px 2px 30px; font-size: 11px; color: var(--faint);
+  text-transform: uppercase; letter-spacing: 0.6px;
+}
+.side-type-head .count { font-size: 11px; color: var(--faint); }
+.side-docs { display: flex; flex-direction: column; gap: 1px; }
+.side-doc {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 4px 12px 4px 42px; border-radius: 8px;
+  color: var(--muted); font-size: 12.5px; line-height: 1.45;
+}
+.side-doc:hover { background: var(--accent-soft); color: var(--text); }
+.side-doc.active { color: var(--accent); background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
+.side-doc-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.side-doc .dot { flex: none; }
+
 .icon-btn {
   width: 34px; height: 34px;
   display: inline-flex; align-items: center; justify-content: center;

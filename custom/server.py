@@ -3,6 +3,7 @@
 依赖：仅 Python 标准库
 """
 import datetime
+import difflib
 import http.server
 import json
 import os
@@ -46,6 +47,9 @@ LOGIN_WINDOW = 60
 SHARE_EXPIRED_KEEP = 30 * 24 * 3600
 DOCS = pathlib.Path(config.get("docs_dir", "/opt/wenshu/docs"))
 API_TOKEN = config.get("api_token", "")
+# 主题治理：单个项目里「只有一篇文档的主题」达到这个数量就在 lint 里报警。
+# 只报警不拦截——确实可能有新主题，硬拦会挡住正常写作。
+TOPIC_SINGLE_ALERT = 5
 
 sessions = {}
 shares = {}
@@ -227,6 +231,90 @@ def doc_version(value):
     return number
 
 
+def load_topic_aliases():
+    """主题别名表：{"别名": "正名"}，放在文档库根的 topics.json。
+
+    只在读取时解析：文件内容、文档 id、URL 全都不变，删掉一行即恢复原样，
+    因此治理主题泛滥不需要任何数据迁移。
+    """
+    try:
+        data = json.loads((DOCS / "topics.json").read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {str(k).strip(): str(v).strip()
+            for k, v in data.items() if str(k).strip() and str(v).strip()}
+
+
+def resolve_topic(name, aliases=None):
+    """把别名解析成正名；支持链式指向，遇到环就停在当前值。"""
+    text = str(name or "").strip()
+    if not text:
+        return text
+    table = load_topic_aliases() if aliases is None else aliases
+    seen = set()
+    while text in table and text not in seen:
+        seen.add(text)
+        text = table[text]
+    return text
+
+
+def topic_suggestions(topic, entries, limit=5):
+    """给新主题名推荐已有的相近主题：只建议，不拒绝写入。
+
+    用标准库 difflib 比较主题名，不依赖嵌入服务：离线可用、结果确定，
+    而主题名本身很短，名字相似度已经足够挡住「换个说法就新开一个主题」。
+    """
+    text = str(topic or "").strip()
+    if not text:
+        return []
+    stats = {}
+    for e in entries:
+        name = str(e["meta"].get("topic") or "").strip()
+        if not name:
+            continue
+        item = stats.setdefault(name, {"topic": name, "count": 0, "projects": []})
+        item["count"] += 1
+        project = str(e["meta"].get("project") or "").strip()
+        if project and project not in item["projects"]:
+            item["projects"].append(project)
+    scored = []
+    for name, item in stats.items():
+        score = 1.0 if name == text else difflib.SequenceMatcher(None, text, name).ratio()
+        if score < 0.5:
+            continue
+        scored.append(dict(item, score=round(score, 3)))
+    scored.sort(key=lambda x: (-x["score"], -x["count"], x["topic"]))
+    return scored[:limit]
+
+
+def topic_stats(entries):
+    """按项目统计主题分布：单篇主题越多，说明主题正在被按文档碎片化。"""
+    per_project = {}
+    for e in entries:
+        project = str(e["meta"].get("project") or "").strip()
+        topic = str(e["meta"].get("topic") or "").strip()
+        if not project or not topic:
+            continue
+        counts = per_project.setdefault(project, {})
+        counts[topic] = counts.get(topic, 0) + 1
+    projects = []
+    for project, counts in sorted(per_project.items()):
+        singles = sorted(name for name, n in counts.items() if n == 1)
+        projects.append({
+            "project": project,
+            "topics": len(counts),
+            "documents": sum(counts.values()),
+            "single_topics": len(singles),
+            "singles": singles[:8],
+            "alert": len(singles) >= TOPIC_SINGLE_ALERT,
+        })
+    return {"threshold": TOPIC_SINGLE_ALERT,
+            "total_single_topics": sum(p["single_topics"] for p in projects),
+            "projects": projects}
+
+
 def extract_doc_files(target_path: str):
     """从被分享文档的构建产物中提取它自己的附件链接（仅限 /files/ 下）。"""
     rel = urllib.parse.unquote(target_path).split("?", 1)[0].lstrip("/")
@@ -347,6 +435,13 @@ def read_entries():
             if not meta:
                 continue
             out.append({"path": p, "rel": rel, "id": rel[:-4], "kind": "sql", "meta": meta, "text": text})
+    aliases = load_topic_aliases()
+    if aliases:
+        # 别名只在内存里解析成正名：文件里的 topic 不变，站点与接口看到的是统一后的主题。
+        for e in out:
+            topic = e["meta"].get("topic")
+            if topic:
+                e["meta"]["topic"] = resolve_topic(topic, aliases)
     return out
 
 
@@ -1912,12 +2007,17 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             return self.json_response(200, info)
 
     def admin_lint(self, qs):
-        """规范骨架体检（只读）：列出 api/openapi 文档缺失的必填小节与仍占位的小节。"""
+        """规范骨架体检 + 主题治理（只读）。
+
+        除 api/openapi 的骨架缺口外，还按项目统计「只有一篇文档的主题」：
+        主题泛滥是慢慢长出来的，靠可见性收敛比靠拦截有效。
+        """
         project = (qs.get("project", [""])[0] or "").strip()
         dtype = (qs.get("type", [""])[0] or "").strip()
         doc_id = (qs.get("id", [""])[0] or "").strip()
+        entries = read_entries()
         docs, scanned = [], 0
-        for e in sorted(read_entries(), key=lambda x: x["id"]):
+        for e in sorted(entries, key=lambda x: x["id"]):
             t = str(e["meta"].get("type") or "other")
             if t not in ("api", "openapi"):
                 continue
@@ -1935,12 +2035,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                              "status": str(e["meta"].get("status") or ""),
                              "url": doc_url(e["id"]),
                              "missing": fmt["missing"], "placeholders": fmt["placeholders"]})
-        return self.json_response(200, {"scanned": scanned, "count": len(docs), "docs": docs})
+        return self.json_response(200, {"scanned": scanned, "count": len(docs), "docs": docs,
+                                        "topics": topic_stats(entries)})
 
     def admin_create(self, payload):
         def mutate(entries):
             project = str(payload.get("project", "")).strip()
-            topic = str(payload.get("topic", "")).strip()
+            topic = resolve_topic(str(payload.get("topic", "")).strip())
             dtype = str(payload.get("type", "sql")).strip()
             title = str(payload.get("title", "")).strip()
             content = str(payload.get("content", ""))
@@ -2026,7 +2127,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             rel = path.relative_to(DOCS).as_posix()
             doc_id = rel.rsplit(".", 1)[0]
             out = {"id": doc_id, "url": doc_url(doc_id), "path": rel,
-                   "commit_message": f"feat: 新建文档 {doc_id}", "_suggest": True}
+                   "commit_message": f"feat: 新建文档 {doc_id}", "_suggest": True,
+                   # 只建议不拒绝：相近主题列出来，由写文档的人决定合并还是新建。
+                   "topic_hint": topic_suggestions(topic, entries)}
             if dtype in ("api", "openapi"):
                 out["scaffold"] = scaffolded
                 out["format"] = lint_doc(dtype, text)
@@ -2152,6 +2255,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                     v = str(payload[k]).strip()
                     if not v:
                         raise ApiError(400, f"{k} 不能为空")
+                    if k == "topic":
+                        v = resolve_topic(v)
                     if k == "type" and v not in DOC_TYPES:
                         raise ApiError(400, "type 必须是: " + "/".join(DOC_TYPES))
                     fields[k] = v

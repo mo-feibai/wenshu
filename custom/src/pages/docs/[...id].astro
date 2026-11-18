@@ -3,7 +3,7 @@ import { getCollection, render } from 'astro:content';
 import Base from '../../layouts/Base.astro';
 import StatusBadge from '../../components/StatusBadge.astro';
 import TypeBadge from '../../components/TypeBadge.astro';
-import { docUrl, fmtDate, versionFamilies } from '../../lib/helpers';
+import { docUrl, fmtDate, typeText, versionFamilies } from '../../lib/helpers';
 import { buildDiff } from '../../lib/diff';
 import fileKeys from '../../../scripts/file_keys.json';
 
@@ -43,14 +43,26 @@ const rawFile =
     ? sqlKey ? `/files/${sqlKey}` : `/files/${entry.data.title}.sql`
     : mdKey ? `/files/${mdKey}` : undefined);
 
+const domainName = (entry.data.domain || '').trim() || '未分领域';
 const targetLabel = entry.data.type === 'sql' ? 'executed（已执行）' : entry.data.type === 'api' || entry.data.type === 'openapi' ? 'implemented（已实现）' : 'final（定稿）';
 const flipCopy = `请将文枢文档「${entry.data.title}」的状态从 pending 改为 ${targetLabel}，文档 ID：${entry.id}。完成后重新构建站点。`;
 ---
 <Base>
+  {/* 面包屑与 URL 逐段对应：项目 › 领域 › 类型 › 标题。
+      路径里的第二段就是领域（主题不进路径），所以这里不再出现主题，
+      主题改在右侧信息面板里看。领域/类型没有独立页面，点进去是项目页的筛选视图。 */}
   <div class="breadcrumb">
-    <a href={`/topics/${encodeURIComponent(entry.data.topic)}/`}>{entry.data.topic}</a>
-    {' / '}
-    <a href={`/projects/${encodeURIComponent(entry.data.project)}/`}>{entry.data.project}</a>{entry.data.domain ? ` · ${entry.data.domain}` : ''}
+    <a href={`/projects/${encodeURIComponent(entry.data.project)}/`}>{entry.data.project}</a>
+    {' › '}
+    {domainName !== '未分领域' ? (
+      <a href={`/projects/${encodeURIComponent(entry.data.project)}/?domain=${encodeURIComponent(domainName)}`}>{domainName}</a>
+    ) : (
+      <span>{domainName}</span>
+    )}
+    {' › '}
+    <a href={`/projects/${encodeURIComponent(entry.data.project)}/?type=${encodeURIComponent(entry.data.type)}`}>{typeText[entry.data.type] ?? entry.data.type}</a>
+    {' › '}
+    <span class="breadcrumb-current">{entry.data.title}</span>
   </div>
 
   <div class="doc-grid">

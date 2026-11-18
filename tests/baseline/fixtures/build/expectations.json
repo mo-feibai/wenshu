@@ -1,31 +1,108 @@
 {
   "description": "Independent literal expectations for fictitious Nebula fixtures; never generated from the application parser.",
   "static_assets": [
-    "favicon.svg", "logo.svg", "swagger/index.html",
-    "vendor/swagger-ui/swagger-ui.css", "vendor/swagger-ui/swagger-ui-bundle.js",
-    "fonts/MapleMono-CN-Regular.woff2", "fonts/MapleMono-CN-SemiBold.woff2", "fonts/MapleMono-CN-Bold.woff2"
+    "favicon.svg",
+    "logo.svg",
+    "swagger/index.html",
+    "vendor/swagger-ui/swagger-ui.css",
+    "vendor/swagger-ui/swagger-ui-bundle.js",
+    "fonts/MapleMono-CN-Regular.woff2",
+    "fonts/MapleMono-CN-SemiBold.woff2",
+    "fonts/MapleMono-CN-Bold.woff2"
   ],
-  "swagger_references": ["/vendor/swagger-ui/swagger-ui.css", "/vendor/swagger-ui/swagger-ui-bundle.js"],
-  "swagger_paths": ["/openapi/spec.yml", "/fonts/MapleMono-CN-Regular.woff2", "/fonts/MapleMono-CN-SemiBold.woff2", "/fonts/MapleMono-CN-Bold.woff2"],
+  "swagger_references": [
+    "/vendor/swagger-ui/swagger-ui.css",
+    "/vendor/swagger-ui/swagger-ui-bundle.js"
+  ],
+  "swagger_paths": [
+    "/openapi/spec.yml",
+    "/fonts/MapleMono-CN-Regular.woff2",
+    "/fonts/MapleMono-CN-SemiBold.woff2",
+    "/fonts/MapleMono-CN-Bold.woff2"
+  ],
   "search_entries": [
-    {"id":"nebula-test/api/dispatch-guide-v1","title":"Nebula dispatch guide (v1)","project":"nebula-test","topic":"Nebula Dispatch","type":"api","status":"implemented","summary":"A wholly fictitious dispatch contract for isolated build validation.","url":"/docs/nebula-test/api/dispatch-guide-v1/"},
-    {"id":"nebula-test/api/dispatch-guide-v2","title":"Nebula dispatch guide (v2)","project":"nebula-test","topic":"Nebula Dispatch","type":"api","status":"pending","summary":"Synthetic dispatch revision with a pending implementation.","url":"/docs/nebula-test/api/dispatch-guide-v2/"},
-    {"id":"nebula-test/api/dispatch-openapi","title":"Nebula OpenAPI reference","project":"nebula-test","topic":"Nebula Dispatch","type":"openapi","status":"pending","summary":"A fictional OpenAPI reference with a raw spec download.","url":"/docs/nebula-test/api/dispatch-openapi/"},
-    {"id":"nebula-test/sql/migration-ledger","title":"Nebula ledger migration","project":"nebula-test","topic":"Nebula Dispatch","type":"sql","status":"pending","summary":"","url":"/docs/nebula-test/sql/migration-ledger/"}
+    {
+      "id": "nebula-test/api/dispatch-guide-v1",
+      "title": "Nebula dispatch guide (v1)",
+      "project": "nebula-test",
+      "topic": "Nebula Dispatch",
+      "type": "api",
+      "status": "implemented",
+      "summary": "A wholly fictitious dispatch contract for isolated build validation.",
+      "url": "/docs/nebula-test/api/dispatch-guide-v1/"
+    },
+    {
+      "id": "nebula-test/api/dispatch-guide-v2",
+      "title": "Nebula dispatch guide (v2)",
+      "project": "nebula-test",
+      "topic": "Nebula Dispatch",
+      "type": "api",
+      "status": "pending",
+      "summary": "Synthetic dispatch revision with a pending implementation.",
+      "url": "/docs/nebula-test/api/dispatch-guide-v2/"
+    },
+    {
+      "id": "nebula-test/api/dispatch-openapi",
+      "title": "Nebula OpenAPI reference",
+      "project": "nebula-test",
+      "topic": "Nebula Dispatch",
+      "type": "openapi",
+      "status": "pending",
+      "summary": "A fictional OpenAPI reference with a raw spec download.",
+      "url": "/docs/nebula-test/api/dispatch-openapi/"
+    },
+    {
+      "id": "nebula-test/sql/migration-ledger",
+      "title": "Nebula ledger migration",
+      "project": "nebula-test",
+      "topic": "Nebula Dispatch",
+      "type": "sql",
+      "status": "pending",
+      "summary": "",
+      "url": "/docs/nebula-test/sql/migration-ledger/"
+    }
   ],
-  "pagefind": {"version":"1.5.2","minimum_pages":4},
+  "pagefind": {
+    "version": "1.5.2",
+    "minimum_pages": 4
+  },
   "downloads": [
-    {"path": "files/dispatch-guide-v1.md", "source": "docs/nebula-test/api/dispatch-guide-v1.md"},
-    {"path": "files/dispatch-guide-v2.md", "source": "docs/nebula-test/api/dispatch-guide-v2.md"},
-    {"path": "files/api__dispatch-openapi.md", "source": "docs/nebula-test/api/dispatch-openapi.md"},
-    {"path": "files/api__dispatch-openapi.yml", "source": "docs/nebula-test/api/dispatch-openapi.yml"},
-    {"path": "files/migration-ledger.sql", "source": "docs/nebula-test/sql/migration-ledger.sql"},
-    {"path": "files/dispatch-diagram.svg", "source": "docs/nebula-test/assets/dispatch-diagram.svg"},
-    {"path": "openapi/spec.yml", "source": "public/openapi/spec.yml"}
+    {
+      "path": "files/dispatch-guide-v1.md",
+      "source": "docs/nebula-test/api/dispatch-guide-v1.md"
+    },
+    {
+      "path": "files/dispatch-guide-v2.md",
+      "source": "docs/nebula-test/api/dispatch-guide-v2.md"
+    },
+    {
+      "path": "files/api__dispatch-openapi.md",
+      "source": "docs/nebula-test/api/dispatch-openapi.md"
+    },
+    {
+      "path": "files/api__dispatch-openapi.yml",
+      "source": "docs/nebula-test/api/dispatch-openapi.yml"
+    },
+    {
+      "path": "files/migration-ledger.sql",
+      "source": "docs/nebula-test/sql/migration-ledger.sql"
+    },
+    {
+      "path": "files/dispatch-diagram.svg",
+      "source": "docs/nebula-test/assets/dispatch-diagram.svg"
+    },
+    {
+      "path": "openapi/spec.yml",
+      "source": "public/openapi/spec.yml"
+    }
   ],
   "download_allowlist": [
-    "dispatch-guide-v1.md", "dispatch-guide-v2.md", "api__dispatch-openapi.md",
-    "api__dispatch-openapi.yml", "migration-ledger.sql", "dispatch-diagram.svg"
+    "dispatch-guide-v1.md",
+    "dispatch-guide-v2.md",
+    "api__dispatch-openapi.md",
+    "api__dispatch-openapi.yml",
+    "migration-ledger.sql",
+    "dispatch-diagram.svg"
   ],
   "pages": [
     {
@@ -34,6 +111,8 @@
       "texts": [
         "4 篇文档",
         "1 个主题",
+        "单篇 0",
+        "Synthetic laboratory",
         "3 个待办",
         "待执行 SQL",
         "待实现接口"
@@ -60,10 +139,6 @@
           "text": "nebula-test"
         },
         {
-          "href": "/topics/Nebula%20Dispatch/",
-          "text": "Nebula Dispatch"
-        },
-        {
           "href": "/pending/",
           "text": "待办看板"
         }
@@ -74,7 +149,8 @@
       "heading": "nebula-test",
       "texts": [
         "当前版 3",
-        "历史版 1"
+        "历史版 1",
+        "Synthetic laboratory"
       ],
       "links": [
         {
@@ -149,9 +225,6 @@
           "href": "/docs/nebula-test/sql/migration-ledger/",
           "text": "Nebula ledger migration"
         }
-      ],
-      "absent_links": [
-        "/docs/nebula-test/api/dispatch-guide-v1/"
       ]
     },
     {
@@ -171,8 +244,12 @@
           "text": "nebula-test"
         },
         {
-          "href": "/topics/Nebula%20Dispatch/",
-          "text": "Nebula Dispatch"
+          "href": "/projects/nebula-test/?domain=Synthetic%20laboratory",
+          "text": "Synthetic laboratory"
+        },
+        {
+          "href": "/projects/nebula-test/?type=api",
+          "text": "API"
         },
         {
           "href": "/docs/nebula-test/api/dispatch-guide-v2/",
@@ -209,8 +286,12 @@
           "text": "nebula-test"
         },
         {
-          "href": "/topics/Nebula%20Dispatch/",
-          "text": "Nebula Dispatch"
+          "href": "/projects/nebula-test/?domain=Synthetic%20laboratory",
+          "text": "Synthetic laboratory"
+        },
+        {
+          "href": "/projects/nebula-test/?type=api",
+          "text": "API"
         },
         {
           "href": "/docs/nebula-test/api/dispatch-guide-v1/",
@@ -260,8 +341,12 @@
           "text": "nebula-test"
         },
         {
-          "href": "/topics/Nebula%20Dispatch/",
-          "text": "Nebula Dispatch"
+          "href": "/projects/nebula-test/?domain=Synthetic%20laboratory",
+          "text": "Synthetic laboratory"
+        },
+        {
+          "href": "/projects/nebula-test/?type=openapi",
+          "text": "OpenAPI"
         },
         {
           "href": "/docs/nebula-test/api/dispatch-guide-v2/",
@@ -292,8 +377,12 @@
           "text": "nebula-test"
         },
         {
-          "href": "/topics/Nebula%20Dispatch/",
-          "text": "Nebula Dispatch"
+          "href": "/projects/nebula-test/?domain=Synthetic%20laboratory",
+          "text": "Synthetic laboratory"
+        },
+        {
+          "href": "/projects/nebula-test/?type=sql",
+          "text": "SQL"
         },
         {
           "href": "/docs/nebula-test/api/dispatch-guide-v2/",

@@ -29,6 +29,22 @@ for (const e of entries) {
   if (!topicSets.has(e.data.project)) topicSets.set(e.data.project, new Set());
   topicSets.get(e.data.project)!.add(e.data.topic);
 }
+/* 单篇主题：一个主题下只有一篇文档。主题泛滥的直接症状就是它一路涨，
+   首页显式报出来，避免「主题数」被当成健康指标。 */
+const topicCounts = new Map<string, Map<string, number>>();
+for (const e of entries) {
+  if (!topicCounts.has(e.data.project)) topicCounts.set(e.data.project, new Map());
+  const m = topicCounts.get(e.data.project)!;
+  m.set(e.data.topic, (m.get(e.data.topic) ?? 0) + 1);
+}
+const singleTopics = (project: string) => {
+  const m = topicCounts.get(project);
+  if (!m) return 0;
+  let n = 0;
+  for (const c of m.values()) if (c === 1) n++;
+  return n;
+};
+const totalSingleTopics = [...topicCounts.keys()].reduce((n, p) => n + singleTopics(p), 0);
 
 const recent = sorted.filter((e) => !e.data.retired_at).slice(0, 9);
 ---
@@ -45,7 +61,7 @@ const recent = sorted.filter((e) => !e.data.retired_at).slice(0, 9);
     <div class="stat"><div class="num">{total}</div><div class="label">文档总数</div></div>
     <div class="stat"><div class="num pending">{pendingSql}</div><div class="label">待执行 SQL</div></div>
     <div class="stat"><div class="num pending">{pendingApi}</div><div class="label">待实现接口</div></div>
-    <div class="stat"><div class="num green">{projectMap.size}</div><div class="label">项目 · {[...topicSets.values()].reduce((n, s) => n + s.size, 0)} 个主题</div></div>
+    <div class="stat"><div class="num green">{projectMap.size}</div><div class="label">项目 · {[...topicSets.values()].reduce((n, s) => n + s.size, 0)} 个主题（单篇 {totalSingleTopics}）</div></div>
   </section>
 
   <h2 class="section-title">项目</h2>
@@ -56,6 +72,7 @@ const recent = sorted.filter((e) => !e.data.retired_at).slice(0, 9);
         <div class="meta">
           <span>{p.count} 篇文档</span>
           <span>{topicSets.get(name)?.size ?? 0} 个主题</span>
+          {singleTopics(name) > 0 && <span style="color:var(--faint)">其中单篇主题 {singleTopics(name)} 个</span>}
           {p.pending > 0 ? <span style="color:var(--amber)">{p.pending} 个待办</span> : <span style="color:var(--green)">无待办</span>}
           <span>最近 {fmtDate(p.latest)}</span>
         </div>

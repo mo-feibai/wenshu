@@ -20,6 +20,7 @@ const docs = entries.map((e) => ({
   url: docUrl(e.id),
   title: e.data.title || e.id,
   topic: e.data.topic || '',
+  domain: (e.data.domain || '').trim(),
   type: (e.data.type || 'other').toString(),
   status: e.data.status || '',
   date: e.data.date ? fmtDate(e.data.date) : '',
@@ -114,9 +115,9 @@ const historical = docs.filter((d) => !isCurrent(d));
       <h2>{g.type} <span class="count">{g.list.length} 篇</span></h2>
       <div class="project-cards">
         {g.list.map((d) => (
-          <article class="project-card">
+          <article class="project-card" data-domain={d.domain || '未分领域'}>
             <h3><a href={d.url}>{d.title}</a></h3>
-            <p class="meta">{d.topic}{d.date ? ` · ${d.date}` : ''}</p>
+            <p class="meta">{d.domain || '未分领域'} · {d.topic}{d.date ? ` · ${d.date}` : ''}</p>
             {d.summary && <p class="summary">{d.summary}</p>}
           </article>
         ))}
@@ -132,9 +133,9 @@ const historical = docs.filter((d) => !isCurrent(d));
       <summary>历史版本（已被替代 / 已归档 {historical.length} 篇）</summary>
       <div class="project-cards">
         {historical.map((d) => (
-          <article class="project-card archived">
+          <article class="project-card archived" data-domain={d.domain || '未分领域'}>
             <h3><a href={d.url}>{d.title}</a></h3>
-            <p class="meta">{d.topic}{d.date ? ` · ${d.date}` : ''} · 已归档</p>
+            <p class="meta">{d.domain || '未分领域'} · {d.topic}{d.date ? ` · ${d.date}` : ''} · 已归档</p>
           </article>
         ))}
       </div>
@@ -146,9 +147,24 @@ const historical = docs.filter((d) => !isCurrent(d));
   (() => {
     const esc = (s) => String(s ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
 
-    /* ---------- 类型过滤（客户端执行：静态页构建期看不到 query） ---------- */
+    /* ---------- 类型 / 领域过滤（客户端执行：静态页构建期看不到 query） ---------- */
     const filter = document.getElementById('type-filter');
     let curType = (new URLSearchParams(location.search).get('type') || 'all').toLowerCase();
+    /* 领域不是独立页面：文档页面包屑里的「领域」指到这里，靠 query 过滤出同一领域的文档 */
+    const curDomain = new URLSearchParams(location.search).get('domain') || '';
+    const applyDomain = () => {
+      if (!curDomain) return;
+      document.querySelectorAll('.project-groups .project-card').forEach((c) => {
+        if (c.dataset.domain !== curDomain) c.remove();
+      });
+      document.querySelectorAll('.project-groups .type-group').forEach((g) => {
+        if (!g.querySelector('.project-card')) g.remove();
+      });
+      const hist = document.querySelector('.project-historical');
+      if (hist) hist.remove();
+      const stats = document.querySelector('.project-stats');
+      if (stats) stats.insertAdjacentHTML('afterbegin', `<span>领域 <b>${curDomain}</b></span>`);
+    };
     const applyFilter = (t) => {
       curType = t;
       document.querySelectorAll('.project-groups .type-group').forEach((g) => {
@@ -163,6 +179,7 @@ const historical = docs.filter((d) => !isCurrent(d));
       if (btn) btn.textContent = t === 'all' ? '分享本项目' : `分享当前筛选（${t}）`;
     };
     applyFilter(curType);
+    applyDomain();
     if (filter) {
       filter.querySelectorAll('.chip').forEach((c) => {
         c.addEventListener('click', () => {
