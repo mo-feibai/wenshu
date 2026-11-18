@@ -30,6 +30,10 @@ if CONFIG_PATH.exists():
 PASSWORD = config.get("password", "")
 PORT = int(config.get("port", 8903))
 SESSION_TTL = 7 * 24 * 3600
+# 登录限速：同一来源在窗口内的失败次数用尽后，连正确密码也先拒绝一段时间，
+# 否则爆破只要打到成功为止，限速就没有意义。
+LOGIN_MAX_FAILURES = 5
+LOGIN_WINDOW = 60
 # 分享过期后仍保留一段时间（不再授权，仅用于区分「已过期」与「链接无效」的提示文案）
 SHARE_EXPIRED_KEEP = 30 * 24 * 3600
 DOCS = pathlib.Path(config.get("docs_dir", "/opt/wenshu/docs"))
@@ -39,6 +43,8 @@ sessions = {}
 shares = {}
 lock = threading.RLock()
 WRITE_LOCK = threading.Lock()
+_LOGIN_FAILURES = {}
+_LOGIN_LOCK = threading.Lock()
 
 PUBLIC_PREFIXES = ("/fonts/",)
 PUBLIC_FILES = ("/favicon.svg", "/logo.svg")
@@ -142,6 +148,40 @@ def purge_expired():
             save_sessions()
 
 
+def login_throttle_state(key):
+    """返回 (是否应拒绝本次尝试, 建议的 Retry-After 秒数)。
+
+    只统计窗口内的失败时间戳：读取时顺手丢掉过期记录，字典不会随时间无限增长。
+    """
+    t = now_ts()
+    with _LOGIN_LOCK:
+        stamps = [s for s in _LOGIN_FAILURES.get(key, []) if t - s < LOGIN_WINDOW]
+        if stamps:
+            _LOGIN_FAILURES[key] = stamps
+        else:
+            _LOGIN_FAILURES.pop(key, None)
+        if len(stamps) < LOGIN_MAX_FAILURES:
+            return False, 0
+        return True, max(1, int(LOGIN_WINDOW - (t - stamps[0])))
+
+
+def note_login_failure(key):
+    t = now_ts()
+    with _LOGIN_LOCK:
+        stamps = [s for s in _LOGIN_FAILURES.get(key, []) if t - s < LOGIN_WINDOW]
+        stamps.append(t)
+        _LOGIN_FAILURES[key] = stamps
+        # 桶数量设上限：伪造来源地址不能把内存撑大。
+        if len(_LOGIN_FAILURES) > 1024:
+            for stale in sorted(_LOGIN_FAILURES, key=lambda k: _LOGIN_FAILURES[k][-1])[:-1024]:
+                del _LOGIN_FAILURES[stale]
+
+
+def clear_login_failures(key):
+    with _LOGIN_LOCK:
+        _LOGIN_FAILURES.pop(key, None)
+
+
 def safe_next(value: str) -> str:
     if not value.startswith("/") or value.startswith("//"):
         return "/"
@@ -162,6 +202,21 @@ def doc_path_segment(value: str, label: str) -> str:
     if any(part in (".", "..") for part in re.split(r"[\\/]+", text)):
         raise ApiError(400, label + " 不能包含上级目录或点路径段")
     return text
+
+
+def doc_version(value):
+    """显式版本号必须是正整数。
+
+    直接 int() 解析非数字会抛 ValueError，被通用异常分支兜成 500 并把内部
+    异常文本回显给调用方；参数问题应当在写入前按 400 拒绝。
+    """
+    try:
+        number = int(str(value).strip())
+    except (TypeError, ValueError):
+        raise ApiError(400, "version 必须是正整数")
+    if number < 1:
+        raise ApiError(400, "version 必须是正整数")
+    return number
 
 
 def extract_doc_files(target_path: str):
@@ -384,6 +439,7 @@ _SNAPSHOT = None              # 不可变快照；读侧无锁，写侧整体替
 _URL_MAP = build_url_map()    # norm_key(doc_id) -> 站点真实 URL（导入时扫一次，重建后刷新）
 _SHARE_FILE_CACHE = {}        # token -> {"files": set, "at": epoch}
 FILE_CACHE_TTL = 300
+MAX_BODY_BYTES = 16 * 1024 * 1024   # 请求体上限：超限直接拒绝，不无限读取占死线程
 
 
 def _entry_is_current(entry, superseded):
@@ -1259,6 +1315,11 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         sid = self.cookies().get("ws_sid")
         return bool(sid and sessions.get(sid, 0) > now_ts())
 
+    def login_throttle_key(self):
+        """限速按来源地址聚合；拿不到地址时落到同一个桶，宁可从严。"""
+        address = getattr(self, "client_address", None)
+        return address[0] if address else "unknown"
+
     def revoke_session(self):
         """注销必须让已复制的会话 ID 立即失效，而不只是清掉浏览器 Cookie。"""
         sid = self.cookies().get("ws_sid")
@@ -1346,19 +1407,23 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
-        self.wfile.write(data)
+        if self.command != "HEAD":
+            self.wfile.write(data)
 
-    def login_page(self, error=""):
+    def login_page(self, error="", code=200, retry_after=None):
         qs = urllib.parse.parse_qs(urllib.parse.urlparse(self.path).query)
         nxt = safe_next(qs.get("next", ["/"])[0])
         body = LOGIN_HTML.replace("{{ERROR}}", f'<div class="error">{escape(error)}</div>' if error else "")
         body = body.replace("{{NEXT}}", escape(nxt, quote=True))
         data = body.encode("utf-8")
-        self.send_response(200)
+        self.send_response(code)
         self.send_header("Content-Type", "text/html; charset=utf-8")
         self.send_header("Content-Length", str(len(data)))
+        if retry_after is not None:
+            self.send_header("Retry-After", str(retry_after))
         self.end_headers()
-        self.wfile.write(data)
+        if self.command != "HEAD":
+            self.wfile.write(data)
 
     def notice_page(self, title, lines, foot="文枢 · 分享链接", code=200, link=None, links=None, head=False):
         body = "".join(f"<p>{escape(t)}</p>" for t in lines)
@@ -1373,7 +1438,7 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         self.send_header("Content-Length", str(len(data)))
         self.end_headers()
         # HEAD 只发头部：写正文会让复用连接上的下一个响应错位。
-        if not head:
+        if not head and self.command != "HEAD":
             self.wfile.write(data)
 
     def share_invalid_page(self, token, head=False):
@@ -1572,12 +1637,38 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     # ---------- Admin API ----------
     def api_auth(self):
+        """API Key 校验。
+
+        请求头可以携带任意非 ASCII 字节，而 secrets.compare_digest 比较含非 ASCII
+        字符的 str 会抛 TypeError；未捕获异常会直接断开连接，连 401 都拿不到。
+        因此统一编码成 bytes 再比较：任何输入都走同一条常量时间路径。
+        """
         key = self.headers.get("X-API-Key", "")
-        return bool(API_TOKEN) and secrets.compare_digest(key, API_TOKEN)
+        if not API_TOKEN:
+            return False
+        try:
+            return secrets.compare_digest(key.encode("utf-8", "surrogateescape"),
+                                          API_TOKEN.encode("utf-8", "surrogateescape"))
+        except Exception:  # noqa: BLE001
+            return False
+
+    def request_body(self):
+        """读取请求体：长度必须是非负整数且不超过上限。
+
+        直接 int() 解析畸形长度会抛未捕获异常并断开连接；负数或超大值会让
+        rfile.read() 一直等数据，把工作线程占死。两种都改为明确的错误响应。
+        """
+        raw = self.headers.get("Content-Length", "0")
+        try:
+            length = int(raw)
+        except (TypeError, ValueError):
+            raise ApiError(400, "Content-Length 非法")
+        if length < 0 or length > MAX_BODY_BYTES:
+            raise ApiError(413, "请求体过大或长度非法")
+        return self.rfile.read(length) if length else b""
 
     def read_json_body(self):
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length) if length else b""
+        body = self.request_body()
         return json.loads(body.decode("utf-8")) if body else {}
 
     def entry_brief(self, e):
@@ -1771,6 +1862,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 raise ApiError(400, "title 必填")
             if not content.strip():
                 raise ApiError(400, "content 必填")
+            # 版本号先校验再算路径：放到写入前，才能保证非法值时既不建文件也不报 500。
+            version = doc_version(payload["version"]) if payload.get("version") is not None else None
             project = doc_path_segment(project, "project")
             domain = str(payload.get("domain", "")).strip()
             if domain:
@@ -1817,8 +1910,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if domain:
                 head["domain"] = domain
             head.update({"topic": topic, "type": dtype, "status": status})
-            if payload.get("version"):
-                head["version"] = int(payload["version"])
+            if version is not None:
+                head["version"] = version
             head["date"] = date
             if related:
                 head["related"] = [str(r) for r in related]
@@ -1877,7 +1970,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             if isinstance(changes, list) and [c for c in changes if str(c).strip()]:
                 content = inject_changelog_sql(content, changes) if dtype == "sql" else inject_changelog_md(content, changes)
             old_version = int(meta.get("version") or 0)
-            new_version = old_version + 1 if payload.get("version") is None else int(payload["version"])
+            new_version = (old_version + 1 if payload.get("version") is None
+                           else doc_version(payload["version"]))
             date = str(payload.get("date") or datetime.date.today().isoformat())
             if dtype == "sql":
                 fname = str(payload.get("filename") or "").strip()
@@ -2304,51 +2398,67 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         parsed = urllib.parse.urlparse(self.path)
         path = urllib.parse.unquote(parsed.path)
         qs = urllib.parse.parse_qs(parsed.query)
-        if path == "/login":
-            return self.login_page()
-        if path == "/logout":
-            self.revoke_session()
-            self.queue_cookie("ws_sid", "", 0)
-            self.queue_cookie("ws_share", "", 0)
-            return self.redirect("/login")
-        if path.startswith("/s/"):
-            return self.consume_share(path[3:])
-        if path == "/api/share/ctx":
-            return self.api_share_ctx(qs)
-        if path == "/api/share/search":
-            return self.api_share_search(qs)
-        if path == "/api/shares":
-            if not self.is_authed():
-                return self.json_response(401, {"error": "未登录"})
-            return self.api_shares_list()
-        if path == "/api/module-docs":
-            if not self.is_authed():
-                return self.json_response(401, {"error": "未登录"})
-            return self.api_module_docs(qs)
-        if path.startswith("/api/admin/"):
-            if not self.api_auth():
-                return self.json_response(401, {"error": "API Key 无效"})
-            if path == "/api/admin/pending":
-                return self.admin_pending()
-            if path == "/api/admin/context":
-                return self.admin_context(qs)
-            if path == "/api/admin/doc":
-                return self.admin_doc(qs)
-            if path == "/api/admin/review":
-                return self.admin_review(qs)
-            if path == "/api/admin/lint":
-                return self.admin_lint(qs)
-            return self.json_response(404, {"error": "unknown admin endpoint"})
-        if path == "/api/status-options":
-            return self.api_status_options(qs)
-        if path == "/api/review":
-            if not self.is_authed():
-                return self.json_response(401, {"error": "未登录"})
-            return self.admin_review(qs)
+        if self.route_dynamic(path, qs):
+            return
         # 授权与静态读取使用同一套解码、路径归一化和平台路径段过滤。
         if not self.static_gate(qs):
             return
         return super().do_GET()
+
+    def route_dynamic(self, path, qs):
+        """GET 与 HEAD 共用的动态路由表；返回 True 表示已由本方法应答。
+
+        HEAD 必须走同一张表：否则动态接口会掉进静态门禁，未登录被重定向到
+        登录页、已登录则因找不到同名文件变成 404，与 GET 的状态码分叉。
+        """
+        if path == "/login":
+            self.login_page()
+        elif path == "/logout":
+            self.revoke_session()
+            self.queue_cookie("ws_sid", "", 0)
+            self.queue_cookie("ws_share", "", 0)
+            self.redirect("/login")
+        elif path.startswith("/s/"):
+            self.consume_share(path[3:])
+        elif path == "/api/share/ctx":
+            self.api_share_ctx(qs)
+        elif path == "/api/share/search":
+            self.api_share_search(qs)
+        elif path == "/api/shares":
+            if not self.is_authed():
+                self.json_response(401, {"error": "未登录"})
+            else:
+                self.api_shares_list()
+        elif path == "/api/module-docs":
+            if not self.is_authed():
+                self.json_response(401, {"error": "未登录"})
+            else:
+                self.api_module_docs(qs)
+        elif path.startswith("/api/admin/"):
+            if not self.api_auth():
+                self.json_response(401, {"error": "API Key 无效"})
+            elif path == "/api/admin/pending":
+                self.admin_pending()
+            elif path == "/api/admin/context":
+                self.admin_context(qs)
+            elif path == "/api/admin/doc":
+                self.admin_doc(qs)
+            elif path == "/api/admin/review":
+                self.admin_review(qs)
+            elif path == "/api/admin/lint":
+                self.admin_lint(qs)
+            else:
+                self.json_response(404, {"error": "unknown admin endpoint"})
+        elif path == "/api/status-options":
+            self.api_status_options(qs)
+        elif path == "/api/review":
+            if not self.is_authed():
+                self.json_response(401, {"error": "未登录"})
+            else:
+                self.admin_review(qs)
+        else:
+            return False
+        return True
 
     def static_gate(self, qs, head=False):
         """GET 与 HEAD 共用的一道静态授权门禁。
@@ -2415,10 +2525,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         return path, True
 
     def do_HEAD(self):
-        """HEAD 是 GET 的投影：同一道门禁、同一套状态码，只是不写正文。"""
+        """HEAD 是 GET 的投影：同一张路由表、同一道门禁、同一套状态码，只是不写正文。"""
         purge_expired()
         parsed = urllib.parse.urlparse(self.path)
+        path = urllib.parse.unquote(parsed.path)
         qs = urllib.parse.parse_qs(parsed.query)
+        if self.route_dynamic(path, qs):
+            return
         if not self.static_gate(qs, head=True):
             return
         return super().do_HEAD()
@@ -2441,19 +2554,30 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     # ---------- POST ----------
     def do_POST(self):
         parsed = urllib.parse.urlparse(self.path)
-        length = int(self.headers.get("Content-Length", 0))
-        body = self.rfile.read(length) if length else b""
+        try:
+            body = self.request_body()
+        except ApiError as exc:
+            # 请求体没读完就应答，连接不能复用，否则后续请求会错位。
+            self.close_connection = True
+            return self.json_response(exc.code, {"error": exc.message})
         if parsed.path == "/login":
             form = urllib.parse.parse_qs(body.decode("utf-8", "replace"))
             password = form.get("password", [""])[0]
             nxt = safe_next(form.get("next", ["/"])[0])
+            key = self.login_throttle_key()
+            blocked, retry_after = login_throttle_state(key)
+            if blocked:
+                return self.login_page(error="尝试次数过多，请稍后再试",
+                                       code=429, retry_after=retry_after)
             if PASSWORD and password == PASSWORD:
+                clear_login_failures(key)
                 sid = secrets.token_urlsafe(24)
                 with lock:
                     sessions[sid] = now_ts() + SESSION_TTL
                     save_sessions()
                 self.queue_cookie("ws_sid", sid, SESSION_TTL)
                 return self.redirect(nxt)
+            note_login_failure(key)
             return self.login_page(error="密码不正确，请重试")
         if parsed.path == "/api/status":
             try:

@@ -907,3 +907,220 @@ class HTTPContracts(unittest.TestCase):
             self.assertEqual(response.status, 200)
             self.assertIsNone(response.header("Location"))
             self.assertIn(b'name="next"', response.body)
+    def test_malformed_content_length_is_rejected_without_dropping_the_connection(self):
+        with ServerSandbox(docs=DOCUMENTS, dist=PAGES) as sandbox:
+            for raw in ["abc", "12x", "", "  "]:
+                with self.subTest(content_length=raw):
+                    response = sandbox.request("POST", "/login", body=b"",
+                                               headers={"Content-Length": raw})
+                    self.assertEqual(response.status, 400, response.body)
+                    self.assertEqual(json.loads(response.body)["error"], "Content-Length 非法")
+            # 同一连接复用不应被上一个坏请求污染：坏请求之后仍能正常登录。
+            ok = sandbox.request("POST", "/login",
+                body=urllib.parse.urlencode({"password": TEST_PASSWORD}).encode("utf-8"),
+                headers={"Content-Type": "application/x-www-form-urlencoded"})
+            self.assertEqual(ok.status, 303)
+
+    def test_negative_or_oversized_content_length_is_refused_without_blocking(self):
+        with ServerSandbox(docs=DOCUMENTS, dist=PAGES) as sandbox:
+            for raw in ["-1", "-9999", "999999999", str(17 * 1024 * 1024)]:
+                with self.subTest(content_length=raw):
+                    response = sandbox.request("POST", "/login", body=b"",
+                                               headers={"Content-Length": raw})
+                    self.assertEqual(response.status, 413, response.body)
+                    self.assertEqual(json.loads(response.body)["error"], "请求体过大或长度非法")
+
+    def test_a_normal_post_body_is_still_read_and_authorized(self):
+        with ServerSandbox(docs=DOCUMENTS, dist=PAGES) as sandbox:
+            ok = sandbox.request("POST", "/login",
+                body=urllib.parse.urlencode({"password": TEST_PASSWORD}).encode("utf-8"),
+                headers={"Content-Type": "application/x-www-form-urlencoded"})
+            self.assertEqual(ok.status, 303)
+            self.assertIsNotNone(response_cookie(ok, "ws_sid").value)
+            empty = sandbox.request("POST", "/login", body=b"")
+            self.assertEqual(empty.status, 200)
+
+    def test_head_mirrors_get_status_and_headers_on_dynamic_routes(self):
+        with ServerSandbox(docs=DOCUMENTS, dist=PAGES, shares=SHARES) as sandbox:
+            for target in ["/login", "/api/shares", "/api/status-options?type=api",
+                           "/api/share/ctx", "/api/admin/pending",
+                           "/s/" + "synthetic-single", "/s/synthetic-missing-token"]:
+                with self.subTest(target=target):
+                    got = sandbox.request("GET", target)
+                    head = sandbox.request("HEAD", target)
+                    self.assertEqual(head.status, got.status, target)
+                    self.assertEqual(head.header("Location"), got.header("Location"), target)
+                    self.assertEqual(head.header("Content-Length"),
+                                     got.header("Content-Length"), target)
+                    self.assertEqual(head.body, b"", target)
+
+    def test_head_on_the_login_page_is_not_a_redirect_loop(self):
+        with ServerSandbox(docs=DOCUMENTS, dist=PAGES) as sandbox:
+            head = sandbox.request("HEAD", "/login")
+            self.assertEqual(head.status, 200, head.header("Location"))
+            self.assertIsNone(head.header("Location"))
+            self.assertEqual(head.body, b"")
+            # 旧实现会 303 到 /login?next=/login，再套一层变成 ?next=...%3Fnext%3D/login。
+            again = sandbox.request("GET", "/login?next=/login")
+            self.assertEqual(again.status, 200)
+            self.assertIsNone(again.header("Location"))
+
+    def test_head_mirrors_get_on_authenticated_and_api_key_routes(self):
+        with ServerSandbox(docs=DOCUMENTS, dist=PAGES, shares=SHARES) as sandbox:
+            cookie = login_cookie(sandbox)
+            key = {"X-API-Key": TEST_API_TOKEN}
+            for target, headers in [("/api/shares", {"Cookie": cookie}),
+                                    ("/api/status-options?type=api", {"Cookie": cookie}),
+                                    ("/api/module-docs?project=sample", {"Cookie": cookie}),
+                                    ("/api/admin/pending", key),
+                                    ("/api/admin/context?project=sample", key)]:
+                with self.subTest(target=target):
+                    got = sandbox.request("GET", target, headers=headers)
+                    head = sandbox.request("HEAD", target, headers=headers)
+                    self.assertEqual(got.status, 200, target)
+                    self.assertEqual(head.status, got.status, target)
+                    self.assertEqual(head.header("Content-Length"),
+                                     got.header("Content-Length"), target)
+                    self.assertEqual(head.body, b"", target)
+    def test_non_ascii_api_key_is_rejected_with_401_instead_of_dropping_the_connection(self):
+        with ServerSandbox(docs=DOCUMENTS, dist=PAGES) as sandbox:
+            # 请求头可以携带任意非 ASCII 字节；旧实现把它们交给 secrets.compare_digest
+            # 比较 str，会抛 TypeError 并让线程直接断开连接，连 401 都拿不到。
+            for label, raw_key in [("latin-1", b"k" + bytes([0xE9]) + b"y"),
+                                   ("utf-8 chinese", bytes([0xE5, 0xAF, 0x86, 0xE9, 0x92, 0xA5])),
+                                   ("raw high byte", bytes([0x80, 0x80]))]:
+                with self.subTest(label=label):
+                    got = sandbox.request("GET", "/api/admin/pending",
+                                          headers={"X-API-Key": raw_key})
+                    self.assertEqual(got.status, 401, label)
+                    self.assertEqual(json.loads(got.body.decode("utf-8"))["error"], "API Key 无效")
+
+    def test_non_ascii_api_key_is_rejected_on_every_admin_route(self):
+        with ServerSandbox(docs=DOCUMENTS, dist=PAGES) as sandbox:
+            bad = {"X-API-Key": bytes([0xFF, 0xFE])}
+            doc_id = "sample/api/中文接口"
+            targets = [("GET", "/api/admin/pending", None),
+                       ("GET", "/api/admin/doc?id=" + encoded(doc_id), None),
+                       ("POST", "/api/admin/status", {"id": doc_id, "status": "pending"}),
+                       ("POST", "/api/admin/create", {"project": "synthetic-project",
+                                                      "topic": "合成主题",
+                                                      "type": "sql",
+                                                      "title": "合成文档",
+                                                      "content": "SELECT 1;"})]
+            for method, target, payload in targets:
+                with self.subTest(target=target):
+                    if method == "GET":
+                        got = sandbox.request("GET", target, headers=bad)
+                    else:
+                        got = sandbox.request("POST", target,
+                                              body=json.dumps(payload).encode("utf-8"),
+                                              headers={"Content-Type": "application/json", **bad})
+                    self.assertEqual(got.status, 401, target)
+            # 非 ASCII 尝试之后服务仍然可用，且合法 Key 依旧能通过。
+            ok = sandbox.request("GET", "/api/admin/pending", headers={"X-API-Key": TEST_API_TOKEN})
+            self.assertEqual(ok.status, 200)
+            self.assertEqual(json.loads(ok.body.decode("utf-8"))["count"], 0)
+
+    def test_non_ascii_api_key_does_not_leak_internal_error_text(self):
+        with ServerSandbox(docs=DOCUMENTS, dist=PAGES) as sandbox:
+            got = sandbox.request("GET", "/api/admin/pending",
+                                  headers={"X-API-Key": bytes([0xE9])})
+            body = got.body.decode("utf-8")
+            self.assertNotIn("TypeError", body)
+            self.assertNotIn("compare_digest", body)
+            self.assertNotIn("Traceback", body)
+    def test_create_rejects_a_non_numeric_version_before_writing(self):
+        with ServerSandbox(docs=DOCUMENTS, dist=PAGES) as sandbox:
+            # 版本号是请求参数：非法值必须在写盘前按 400 拒绝，不能掉进通用异常
+            # 分支变成 500，更不能把内部异常文本回显出去。
+            before = self._doc_snapshot(sandbox)
+            bad_values = ["abc", "1.5", "-2", "0", "", "  x  ", [], {"a": 1}]
+            for index, bad in enumerate(bad_values):
+                with self.subTest(value=repr(bad)):
+                    payload = {"project": "synthetic-project", "topic": "合成主题",
+                               "type": "sql", "title": "合成版本%d" % index,
+                               "content": "SELECT 1;", "version": bad}
+                    got = post_json(sandbox, "/api/admin/create", payload,
+                                    {"X-API-Key": TEST_API_TOKEN})
+                    self.assertEqual(got.status, 400, repr(bad))
+                    body = json.loads(got.body.decode("utf-8"))
+                    self.assertEqual(body.get("error"), "version 必须是正整数")
+                    self.assertNotIn("内部错误", json.dumps(body, ensure_ascii=False))
+                    self.assertNotIn("invalid literal", json.dumps(body, ensure_ascii=False))
+            self.assertEqual(self._doc_snapshot(sandbox), before)
+
+    def test_version_endpoint_rejects_a_non_numeric_explicit_version(self):
+        with ServerSandbox(docs=DOCUMENTS, dist=PAGES) as sandbox:
+            before = self._doc_snapshot(sandbox)
+            payload = {"id": "sample/sql/迁移-测试", "content": "SELECT 9;",
+                       "changes": ["合成变更"], "version": "abc"}
+            got = post_json(sandbox, "/api/admin/version", payload,
+                            {"X-API-Key": TEST_API_TOKEN})
+            self.assertEqual(got.status, 400)
+            body = json.loads(got.body.decode("utf-8"))
+            self.assertEqual(body.get("error"), "version 必须是正整数")
+            self.assertEqual(self._doc_snapshot(sandbox), before)
+
+    def test_create_accepts_a_positive_integer_version(self):
+        with ServerSandbox(docs=DOCUMENTS, dist=PAGES) as sandbox:
+            payload = {"project": "synthetic-project", "topic": "合成主题",
+                       "type": "sql", "title": "合成版本号",
+                       "content": "SELECT 1;", "version": 2}
+            got = post_json(sandbox, "/api/admin/create", payload,
+                            {"X-API-Key": TEST_API_TOKEN})
+            self.assertEqual(got.status, 200)
+            body = json.loads(got.body.decode("utf-8"))
+            self.assertTrue(body.get("ok") and body.get("built"))
+            text = (sandbox.docs / body["path"]).read_text(encoding="utf-8")
+            self.assertIn("version: 2", text)
+    def test_repeated_login_failures_are_throttled_with_retry_after(self):
+        with ServerSandbox(docs=DOCUMENTS, dist=PAGES) as sandbox:
+            # 登录必须限速：连续失败达到阈值后返回 429 并给出 Retry-After，
+            # 而不是继续接受无限制的密码猜测。
+            form = {"Content-Type": "application/x-www-form-urlencoded"}
+            for attempt in range(1, 6):
+                got = sandbox.request("POST", "/login", body=b"password=wrong",
+                                      headers=form)
+                self.assertEqual(got.status, 200, attempt)
+            blocked = sandbox.request("POST", "/login", body=b"password=wrong",
+                                      headers=form)
+            self.assertEqual(blocked.status, 429)
+            retry_after = blocked.header("Retry-After")
+            self.assertIsNotNone(retry_after)
+            self.assertGreater(int(retry_after), 0)
+            self.assertIsNone(blocked.header("Set-Cookie"))
+            self.assertIn("尝试次数过多", blocked.body.decode("utf-8"))
+
+    def test_throttling_also_refuses_the_correct_password_while_the_window_is_open(self):
+        with ServerSandbox(docs=DOCUMENTS, dist=PAGES) as sandbox:
+            # 用尽次数后连正确密码也要先拒：否则爆破打到成功为止，限速形同虚设。
+            form = {"Content-Type": "application/x-www-form-urlencoded"}
+            for _ in range(5):
+                sandbox.request("POST", "/login", body=b"password=wrong", headers=form)
+            got = sandbox.request(
+                "POST", "/login",
+                body=urllib.parse.urlencode({"password": TEST_PASSWORD}).encode(),
+                headers=form)
+            self.assertEqual(got.status, 429)
+            self.assertIsNone(got.header("Set-Cookie"))
+
+    def test_a_successful_login_clears_the_failure_window(self):
+        with ServerSandbox(docs=DOCUMENTS, dist=PAGES) as sandbox:
+            # 成功登录要清零：否则正常用户偶发输错几次后会被自己的历史拖住。
+            form = {"Content-Type": "application/x-www-form-urlencoded"}
+            for _ in range(4):
+                sandbox.request("POST", "/login", body=b"password=wrong", headers=form)
+            good = sandbox.request(
+                "POST", "/login",
+                body=urllib.parse.urlencode({"password": TEST_PASSWORD}).encode(),
+                headers=form)
+            self.assertEqual(good.status, 303)
+            self.assertIsNotNone(good.header("Set-Cookie"))
+            for _ in range(4):
+                sandbox.request("POST", "/login", body=b"password=wrong", headers=form)
+            again = sandbox.request(
+                "POST", "/login",
+                body=urllib.parse.urlencode({"password": TEST_PASSWORD}).encode(),
+                headers=form)
+            self.assertEqual(again.status, 303)
+            self.assertIsNotNone(again.header("Set-Cookie"))
