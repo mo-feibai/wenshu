@@ -64,3 +64,6 @@ Thumbs.db
 
 # 会话工具运行数据（OpenCode / Magic Context 本地缓存）
 .cortexkit/
+
+# 跨会话记忆库（本地私有数据，不入库）
+.dsh-meow/
