@@ -139,6 +139,10 @@
           "text": "nebula-test"
         },
         {
+          "href": "/projects/nebula-test/?domain=Synthetic%20laboratory",
+          "text": "Synthetic laboratory"
+        },
+        {
           "href": "/pending/",
           "text": "待办看板"
         }

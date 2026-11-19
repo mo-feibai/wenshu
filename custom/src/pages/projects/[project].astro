@@ -49,6 +49,8 @@ const groups = types
 const historical = docs.filter((d) => !isCurrent(d));
 ---
 <Base>
+<div class="project-layout">
+<div class="project-main">
 <section class="project-hero">
   <h1>{project}</h1>
   <div class="project-stats">
@@ -142,6 +144,21 @@ const historical = docs.filter((d) => !isCurrent(d));
     </details>
   </section>
 )}
+</div>
+
+<aside class="project-toc">
+  <div class="toc-title">本页目录 <span class="count">{stats.cur} 篇</span></div>
+  {groups.map((g) => (
+    <div class="toc-group" data-type={g.type}>
+      <div class="toc-head">{g.type} <span class="count">{g.list.length}</span></div>
+      {g.list.map((d) => (
+        <a class="toc-link" href={d.url} title={d.title}>{d.title}</a>
+      ))}
+    </div>
+  ))}
+  {groups.length === 0 && <p class="empty">当前筛选下暂无文档</p>}
+</aside>
+</div>
 
 <script is:inline define:vars={{ projectName: project }}>
   (() => {
@@ -160,6 +177,15 @@ const historical = docs.filter((d) => !isCurrent(d));
       document.querySelectorAll('.project-groups .type-group').forEach((g) => {
         if (!g.querySelector('.project-card')) g.remove();
       });
+      /* 右侧目录同步按领域裁剪（构建期无 query，只能客户端处理） */
+      document.querySelectorAll('.project-toc .toc-link').forEach((a) => {
+        const card = [...document.querySelectorAll('.project-groups .project-card')]
+          .find((c) => c.querySelector('a')?.getAttribute('href') === a.getAttribute('href'));
+        if (!card) a.remove();
+      });
+      document.querySelectorAll('.project-toc .toc-group').forEach((g) => {
+        if (!g.querySelector('.toc-link')) g.remove();
+      });
       const hist = document.querySelector('.project-historical');
       if (hist) hist.remove();
       const stats = document.querySelector('.project-stats');
@@ -169,6 +195,9 @@ const historical = docs.filter((d) => !isCurrent(d));
       curType = t;
       document.querySelectorAll('.project-groups .type-group').forEach((g) => {
         g.style.display = (t === 'all' || g.id === 'type-' + t) ? '' : 'none';
+      });
+      document.querySelectorAll('.project-toc .toc-group').forEach((g) => {
+        g.style.display = (t === 'all' || g.dataset.type === t) ? '' : 'none';
       });
       if (filter) {
         filter.querySelectorAll('.chip').forEach((c) => {

@@ -239,35 +239,8 @@ mark.search-hit.current {
 .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; }
 .dot.pending { background: var(--amber); box-shadow: 0 0 0 3px var(--amber-soft); }
 
-/* 侧栏第三层：领域 → 类型 → 文档。
-   层级顺序刻意和 URL 一致（项目/领域/类型/文件名），
-   这样从地址栏就能推断出侧栏该点哪三下。 */
-.side-domain { margin: 2px 0 6px; }
-.side-domain-head {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 4px 12px 4px 18px; font-size: 12px; color: var(--faint);
-  letter-spacing: 0.5px;
-}
-.side-domain.active > .side-domain-head { color: var(--accent); }
-.side-domain-name { min-width: 0; overflow-wrap: anywhere; font-weight: 600; }
-.side-domain-head .count { font-size: 11px; color: var(--faint); }
-.side-type { margin: 1px 0 3px; }
-.side-type-head {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 2px 12px 2px 30px; font-size: 11px; color: var(--faint);
-  text-transform: uppercase; letter-spacing: 0.6px;
-}
-.side-type-head .count { font-size: 11px; color: var(--faint); }
-.side-docs { display: flex; flex-direction: column; gap: 1px; }
-.side-doc {
-  display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 4px 12px 4px 42px; border-radius: 8px;
-  color: var(--muted); font-size: 12.5px; line-height: 1.45;
-}
-.side-doc:hover { background: var(--accent-soft); color: var(--text); }
-.side-doc.active { color: var(--accent); background: var(--accent-soft); box-shadow: inset 2px 0 0 var(--accent); }
-.side-doc-title { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.side-doc .dot { flex: none; }
+/* 侧栏瘦身方案 B：领域是直接进入项目页筛选的链接，不再铺开类型与文档 */
+.side-domain-link { font-size: 12.5px; }
 
 .icon-btn {
   width: 34px; height: 34px;
@@ -299,6 +272,35 @@ html.module-mode .sidebar nav, html.module-mode .sidebar-footer { display: none;
 html.module-mode .search-wrap { display: block; }
 
 .content { padding: 28px 36px 60px; max-width: 1180px; margin: 0 auto; }
+
+/* ---------- 项目页：左侧内容 + 右侧 sticky 目录 ---------- */
+/* 侧栏瘦身方案 B：文档清单从全局侧栏移到项目页右栏，按类型分组。 */
+.project-layout { display: grid; grid-template-columns: minmax(0, 1fr) 240px; gap: 28px; align-items: start; }
+.project-main { min-width: 0; }
+.project-toc {
+  position: sticky; top: 14px; max-height: calc(100vh - 40px); overflow-y: auto;
+  border: 1px solid var(--border); border-radius: 12px; padding: 14px 14px 18px;
+  background: var(--card); font-size: 12.5px;
+}
+.toc-title {
+  font-weight: 700; font-size: 12px; text-transform: uppercase; letter-spacing: .8px;
+  color: var(--faint); margin-bottom: 10px; display: flex; justify-content: space-between; gap: 8px;
+}
+.toc-group { margin-top: 12px; }
+.toc-head {
+  font-size: 11px; color: var(--faint); text-transform: uppercase; letter-spacing: .5px;
+  padding-bottom: 4px; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; gap: 8px;
+}
+.toc-link {
+  display: block; padding: 5px 6px; border-radius: 6px; color: var(--muted);
+  text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.toc-link:hover { background: var(--accent-soft); color: var(--accent); }
+.project-toc .count { font-size: 11px; color: var(--faint); }
+@media (max-width: 1000px) {
+  .project-layout { grid-template-columns: 1fr; }
+  .project-toc { position: static; max-height: none; }
+}
 
 /* ---------- 通用组件 ---------- */
 .badge {

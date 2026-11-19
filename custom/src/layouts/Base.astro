@@ -1,6 +1,6 @@
 ---
 import { getCollection } from 'astro:content';
-import { docUrl, typeText } from '../lib/helpers';
+import { docUrl } from '../lib/helpers';
 import '../styles/global.css';
 
 const entries = await getCollection('docs');
@@ -22,18 +22,16 @@ const activeTopic = (() => {
 })();
 const activeDomain = activeEntry ? (activeEntry.data.domain || '').trim() || UNASSIGNED_DOMAIN : '';
 
-type SideDoc = { id: string; url: string; title: string; type: string; pending: boolean };
-type SideType = { name: string; count: number; pending: number; docs: SideDoc[] };
-type SideDomain = { name: string; count: number; pending: number; types: SideType[] };
+type SideDomain = { name: string; count: number; pending: number };
 
-/* 侧栏层级必须和文档路径一致：项目 → 领域 → 类型 → 文档。
-   路径里的第二段是领域而不是主题（主题不进路径、可跨项目共用），
-   照主题铺开会出现「点进项目却找不到刚打开那篇文档」的情况。 */
+/* 侧栏只保留项目 → 领域两层：领域链接带 ?domain= 直接进项目页筛选。
+   类型与文档不再铺在全局侧栏（一个项目几十篇文档会把侧栏撑爆），
+   改为项目页右侧的 sticky 目录呈现。 */
 const projectMap = new Map<string, {
   count: number;
   pending: number;
   topics: Set<string>;
-  domains: Map<string, { count: number; pending: number; types: Map<string, SideType> }>;
+  domains: Map<string, { count: number; pending: number }>;
 }>();
 for (const e of entries) {
   let p = projectMap.get(e.data.project);
@@ -49,26 +47,11 @@ for (const e of entries) {
   const domainName = (e.data.domain || '').trim() || UNASSIGNED_DOMAIN;
   let d = p.domains.get(domainName);
   if (!d) {
-    d = { count: 0, pending: 0, types: new Map() };
+    d = { count: 0, pending: 0 };
     p.domains.set(domainName, d);
   }
   d.count++;
   if (pending) d.pending++;
-  const typeName = (e.data.type || 'other').toString();
-  let t = d.types.get(typeName);
-  if (!t) {
-    t = { name: typeName, count: 0, pending: 0, docs: [] };
-    d.types.set(typeName, t);
-  }
-  t.count++;
-  if (pending) t.pending++;
-  t.docs.push({
-    id: e.id,
-    url: docUrl(e.id),
-    title: e.data.title || e.id,
-    type: typeName,
-    pending,
-  });
 }
 const compareDomain = (a: SideDomain, b: SideDomain) => {
   if (a.name === UNASSIGNED_DOMAIN) return 1;
@@ -82,17 +65,7 @@ const projects = [...projectMap.entries()]
     pending: p.pending,
     topics: [...p.topics],
     domains: [...p.domains.entries()]
-      .map(([domainName, d]) => ({
-        name: domainName,
-        count: d.count,
-        pending: d.pending,
-        types: [...d.types.values()]
-          .map((t) => ({
-            ...t,
-            docs: [...t.docs].sort((a, b) => a.title.localeCompare(b.title, 'zh')),
-          }))
-          .sort((a, b) => a.name.localeCompare(b.name)),
-      }))
+      .map(([domainName, d]) => ({ name: domainName, count: d.count, pending: d.pending }))
       .sort(compareDomain),
   }))
   .sort((a, b) => a.name.localeCompare(b.name));
@@ -155,32 +128,13 @@ const totalPending = entries.filter((e) => e.data.status === 'pending').length;
                   <span class="count">{p.count}</span>
                 </a>
                 {p.domains.map((d) => (
-                  <div class={`side-domain ${activeDomain === d.name ? 'active' : ''}`} data-domain={d.name}>
-                    <div class="side-domain-head">
-                      <span class="side-domain-name">{d.name}</span>
-                      {d.pending > 0 ? <span class="dot pending" title="有未完成事项" /> : <span class="count">{d.count}</span>}
-                    </div>
-                    {d.types.map((t) => (
-                      <div class="side-type" data-type={t.name}>
-                        <div class="side-type-head">
-                          <span class="side-type-name">{typeText[t.name] ?? t.name}</span>
-                          <span class="count">{t.count}</span>
-                        </div>
-                        <div class="side-docs">
-                          {t.docs.map((doc) => (
-                            <a
-                              class={`side-doc ${doc.url === activeDocUrl ? 'active' : ''}`}
-                              href={doc.url}
-                              title={doc.title}
-                            >
-                              <span class="side-doc-title">{doc.title}</span>
-                              {doc.pending && <span class="dot pending" title="未完成" />}
-                            </a>
-                          ))}
-                        </div>
-                      </div>
-                    ))}
-                  </div>
+                  <a
+                    class={`side-topic side-domain-link ${activeDomain === d.name ? 'active' : ''}`}
+                    href={`/projects/${encodeURIComponent(p.name)}/?domain=${encodeURIComponent(d.name)}`}
+                  >
+                    <span>{d.name}</span>
+                    {d.pending > 0 ? <span class="dot pending" title="有未完成事项" /> : <span class="count">{d.count}</span>}
+                  </a>
                 ))}
               </div>
             </div>
@@ -416,7 +370,7 @@ const totalPending = entries.filter((e) => e.data.status === 'pending').length;
           try { sessionStorage.setItem(SB_KEY, String(sidebar.scrollTop)); } catch {}
         });
 
-        const active = sidebar.querySelector('.side-doc.active') || sidebar.querySelector('.side-topic.active');
+        const active = sidebar.querySelector('.side-topic.active');
         if (active && sidebar.clientHeight) {
           const sRect = sidebar.getBoundingClientRect();
           const aRect = active.getBoundingClientRect();
