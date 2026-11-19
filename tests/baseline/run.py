@@ -22,6 +22,7 @@ MODULES = (
     "tests.baseline.test_known_gaps",
     "tests.baseline.test_build_site",
     "tests.baseline.test_static_check",
+    "tests.baseline.test_theme",
     "tests.baseline.test_tempdirs",
     "tests.baseline.test_runner",
 )

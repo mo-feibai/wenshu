@@ -82,6 +82,20 @@ const totalPending = entries.filter((e) => e.data.status === 'pending').length;
     <meta name="description" content="文档脉络 · 版本有迹 · 人机共读" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
     <link rel="preload" href="/fonts/MapleMono-CN-Regular.woff2" as="font" type="font/woff2" crossorigin />
+    <script is:inline>
+      /* 首屏前定主题，避免系统为浅色时先闪一下深色：auto 跟随系统，light/dark 为显式选择 */
+      (() => {
+        let mode = 'auto';
+        try {
+          const saved = localStorage.getItem('ws-theme');
+          if (saved === 'light' || saved === 'dark') mode = saved;
+        } catch {}
+        const systemDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+        const root = document.documentElement;
+        root.dataset.theme = mode === 'auto' ? (systemDark ? 'dark' : 'light') : mode;
+        root.dataset.themeMode = mode;
+      })();
+    </script>
   </head>
   <body>
     <header class="topbar">
@@ -98,7 +112,7 @@ const totalPending = entries.filter((e) => e.data.status === 'pending').length;
         </svg>
         {totalPending > 0 && <span class="pending-badge">{totalPending}</span>}
       </a>
-      <button id="theme-toggle" title="切换明暗主题">◐</button>
+      <button id="theme-toggle" type="button" title="主题：跟随系统（点击切换为浅色）" aria-label="主题：跟随系统（点击切换为浅色）">◐</button>
     </header>
     <div class="shell">
       <aside class="sidebar">
@@ -154,8 +168,31 @@ const totalPending = entries.filter((e) => e.data.status === 'pending').length;
     </div>
     <script is:inline>
       const html = document.documentElement;
-      const saved = localStorage.getItem('ws-theme');
-      if (saved) html.dataset.theme = saved;
+      /* auto 跟随系统（含运行中切换），light/dark 为用户显式选择 */
+      const THEME_LABELS = {
+        auto: '跟随系统（点击切换为浅色）',
+        light: '浅色（点击切换为深色）',
+        dark: '深色（点击切换为跟随系统）',
+      };
+      const THEME_ICONS = { auto: '◐', light: '☀', dark: '☾' };
+      let themeMode = html.dataset.themeMode || 'auto';
+      const themeBtn = document.getElementById('theme-toggle');
+      const syncThemeButton = () => {
+        if (!themeBtn) return;
+        const label = `主题：${THEME_LABELS[themeMode] || THEME_LABELS.auto}`;
+        themeBtn.textContent = THEME_ICONS[themeMode] || THEME_ICONS.auto;
+        themeBtn.title = label;
+        themeBtn.setAttribute('aria-label', label);
+      };
+      syncThemeButton();
+      const systemThemeQuery = window.matchMedia ? window.matchMedia('(prefers-color-scheme: dark)') : null;
+      if (systemThemeQuery) {
+        const onSystemThemeChange = (e) => {
+          if (themeMode === 'auto') html.dataset.theme = e.matches ? 'dark' : 'light';
+        };
+        if (systemThemeQuery.addEventListener) systemThemeQuery.addEventListener('change', onSystemThemeChange);
+        else if (systemThemeQuery.addListener) systemThemeQuery.addListener(onSystemThemeChange);
+      }
       if (new URLSearchParams(location.search).get('share') === '1') html.classList.add('shared');
       const isShareView = new URLSearchParams(location.search).get('share') === '1';
 
@@ -328,9 +365,14 @@ const totalPending = entries.filter((e) => e.data.status === 'pending').length;
         }
       }
       bootShareScope();
-      document.getElementById('theme-toggle')?.addEventListener('click', () => {
-        html.dataset.theme = html.dataset.theme === 'dark' ? 'light' : 'dark';
-        localStorage.setItem('ws-theme', html.dataset.theme);
+      themeBtn?.addEventListener('click', () => {
+        themeMode = themeMode === 'auto' ? 'light' : themeMode === 'light' ? 'dark' : 'auto';
+        try { localStorage.setItem('ws-theme', themeMode); } catch {}
+        html.dataset.theme = themeMode === 'auto'
+          ? (systemThemeQuery && systemThemeQuery.matches ? 'dark' : 'light')
+          : themeMode;
+        html.dataset.themeMode = themeMode;
+        syncThemeButton();
       });
 
       const sidebar = document.querySelector('.sidebar');

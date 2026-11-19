@@ -93,8 +93,8 @@ class RunnerContracts(unittest.TestCase):
         self.assertEqual(run.MODULES, (
             "tests.baseline.test_harness", "tests.baseline.test_contracts",
             "tests.baseline.test_known_gaps", "tests.baseline.test_build_site",
-            "tests.baseline.test_static_check", "tests.baseline.test_tempdirs",
-            "tests.baseline.test_runner",
+            "tests.baseline.test_static_check", "tests.baseline.test_theme",
+            "tests.baseline.test_tempdirs", "tests.baseline.test_runner",
         ))
         with mock.patch.object(unittest.TestLoader, "loadTestsFromName") as imported:
             for selected in ((), ("tests.baseline.test_tempdirs",) * 2):
